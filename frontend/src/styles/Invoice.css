@@ -1,0 +1,327 @@
+/* =========================================================================
+   CARECONNECT — MEDICAL TAX INVOICE & RECEIPT STYLES
+   ========================================================================= */
+
+.invoice-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1050;
+  padding: 1.5rem;
+  overflow-y: auto;
+  animation: invoiceFadeIn 0.25s ease-out;
+}
+
+@keyframes invoiceFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.invoice-card {
+  background: #ffffff;
+  color: #1e293b;
+  width: 100%;
+  max-width: 680px;
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+.invoice-content {
+  padding: 2.5rem;
+}
+
+/* Header */
+.invoice-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid #e2e8f0;
+  margin-bottom: 1.5rem;
+}
+
+.invoice-brand-logo {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  letter-spacing: -0.02em;
+}
+
+.invoice-brand-logo span {
+  color: #10b981;
+}
+
+.invoice-subhead {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-top: 0.25rem;
+  font-weight: 500;
+}
+
+.invoice-meta {
+  text-align: right;
+}
+
+.invoice-title-badge {
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.12);
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  display: inline-block;
+  margin-bottom: 0.35rem;
+}
+
+.invoice-number {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.invoice-date {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-top: 0.2rem;
+}
+
+/* Parties Grid */
+.invoice-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.party-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.party-box-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-bottom: 0.4rem;
+}
+
+.party-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.2rem;
+}
+
+.party-detail {
+  font-size: 0.82rem;
+  color: #475569;
+  line-height: 1.4;
+}
+
+/* Appointment Info Pill */
+.invoice-appt-info {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  padding: 0.85rem 1.25rem;
+  margin-bottom: 1.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.appt-info-item {
+  font-size: 0.85rem;
+  color: #166534;
+}
+
+.appt-info-item strong {
+  color: #0f172a;
+}
+
+/* Table */
+.invoice-table-wrapper {
+  margin-bottom: 1.75rem;
+}
+
+.invoice-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.invoice-table th {
+  background: #f1f5f9;
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.invoice-table td {
+  padding: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.88rem;
+  color: #334155;
+}
+
+/* Summary Box */
+.invoice-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-top: 1rem;
+  margin-bottom: 2rem;
+}
+
+.invoice-payment-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.paid-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #047857;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1.5px solid #10b981;
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  letter-spacing: 0.08em;
+  transform: rotate(-2deg);
+}
+
+.pending-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1.5px solid #f59e0b;
+  padding: 0.35rem 0.85rem;
+  border-radius: 6px;
+  letter-spacing: 0.08em;
+}
+
+.invoice-totals {
+  width: 240px;
+}
+
+.totals-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #64748b;
+  margin-bottom: 0.4rem;
+}
+
+.totals-row.discount {
+  color: #059669;
+  font-weight: 600;
+}
+
+.totals-row.grand-total {
+  border-top: 2px solid #0f172a;
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+/* Footer & Legal */
+.invoice-footer-note {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 1.25rem;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Action Bar */
+.invoice-actions-bar {
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  padding: 1.25rem 2.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* =========================================================================
+   PRINT STYLES FOR INVOICE
+   ========================================================================= */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .invoice-modal-overlay {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    backdrop-filter: none !important;
+  }
+
+  .invoice-card,
+  .invoice-card * {
+    visibility: visible !important;
+  }
+
+  .invoice-card {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .invoice-content {
+    padding: 1.5cm !important;
+  }
+
+  .invoice-actions-bar {
+    display: none !important;
+  }
+}
