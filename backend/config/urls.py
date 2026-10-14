@@ -3,7 +3,19 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+from django.http import JsonResponse
+from django.utils import timezone
+
+def health_check(request):
+    return JsonResponse({
+        "status": "healthy",
+        "service": "careconnect-backend",
+        "timestamp": timezone.now().isoformat()
+    })
+
 urlpatterns = [
+    path('health/', health_check, name='health_check_root'),
+    path('api/health/', health_check, name='health_check_api'),
     path('admin/', admin.site.urls),
 
     # REST APIs (JWT-auth)

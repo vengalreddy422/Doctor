@@ -80,4 +80,18 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-export const useAuth = () => useContext(AuthContext);
+const defaultAuth = {
+  user: null,
+  loading: false,
+  login: async () => {},
+  logout: () => {},
+  updateUser: () => {},
+  isAdmin: false,
+  isHospital: false,
+  isStaffOrHospital: false,
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  return context || defaultAuth;
+};
