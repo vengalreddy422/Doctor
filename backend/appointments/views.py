@@ -414,12 +414,34 @@ class CancelAppointmentView(APIView):
                 'cancelled_at', 'updated_at'
             ])
 
-            # Update linked payment status if exists
+            # Update linked payment status and trigger Razorpay refund API if eligible
             payment = Payment.objects.filter(appointment=appointment).first()
             if payment:
-                if Decimal(refund_info['refund_amount']) > Decimal('0.00'):
+                refund_amt = Decimal(refund_info['refund_amount'])
+                if refund_amt > Decimal('0.00') and payment.razorpay_payment_id:
+                    try:
+                        from payments.utils import client as razorpay_client
+                        refund_paise = int(refund_amt * 100)
+                        refund_res = razorpay_client.payment.refund(
+                            payment.razorpay_payment_id,
+                            {
+                                "amount": refund_paise,
+                                "notes": {
+                                    "appointment_id": str(appointment.id),
+                                    "receipt_id": str(appointment.receipt_id),
+                                    "reason": reason
+                                }
+                            }
+                        )
+                        payment.razorpay_refund_id = refund_res.get('id', '')
+                        payment.status = 'refunded' if Decimal(refund_info['deduction_amount']) == Decimal('0.00') else 'partially_refunded'
+                        payment.refund_error = ''
+                    except Exception as refund_err:
+                        payment.refund_error = str(refund_err)
+                        print(f"[-] Razorpay refund API call failed: {refund_err}")
+                elif refund_amt > Decimal('0.00'):
                     payment.status = 'refunded'
-                payment.save(update_fields=['status', 'updated_at'])
+                payment.save(update_fields=['status', 'razorpay_refund_id', 'refund_error', 'updated_at'])
 
             # Invalidate slots and dashboard caches for immediate live updates
             from django.core.cache import cache

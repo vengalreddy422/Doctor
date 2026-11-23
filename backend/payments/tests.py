@@ -41,12 +41,46 @@ class PaymentCancellationRegressionTests(TestCase):
 
     def test_cancel_appointment_with_linked_payment_does_not_crash_on_updated_at(self):
         """Regression test for Bug 2.a: Ensure payment.save(update_fields=['status', 'updated_at']) succeeds."""
-        response = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "Personal issue"})
-        self.assertEqual(response.status_code, 200)
+        from unittest.mock import patch
+        with patch("payments.utils.client.payment.refund", return_value={"id": "rfnd_mock_123"}):
+            response = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "Personal issue"})
+            self.assertEqual(response.status_code, 200)
 
-        self.appointment.refresh_from_db()
-        self.assertEqual(self.appointment.status, "cancelled")
+            self.appointment.refresh_from_db()
+            self.assertEqual(self.appointment.status, "cancelled")
 
-        self.payment.refresh_from_db()
-        self.assertEqual(self.payment.status, "refunded")
-        self.assertIsNotNone(self.payment.updated_at)
+            self.payment.refresh_from_db()
+            self.assertIn(self.payment.status, ["refunded", "partially_refunded"])
+            self.assertIsNotNone(self.payment.updated_at)
+
+    def test_cancel_triggers_razorpay_refund_api_and_stores_refund_id(self):
+        """Regression test for 2.b: Razorpay refund API call on cancellation."""
+        from unittest.mock import patch
+
+        mock_refund_response = {"id": "rfnd_test_7890", "amount": 100000, "status": "processed"}
+        with patch("payments.utils.client.payment.refund", return_value=mock_refund_response) as mock_refund:
+            response = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "Doctor change"})
+            self.assertEqual(response.status_code, 200)
+
+            mock_refund.assert_called_once()
+
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.razorpay_refund_id, "rfnd_test_7890")
+            self.assertEqual(self.payment.status, "refunded")
+            self.assertEqual(self.payment.refund_error, "")
+
+    def test_cancel_handles_razorpay_refund_api_failure_without_losing_cancellation(self):
+        """Regression test for 2.b: API failure is handled gracefully without losing the cancellation."""
+        from unittest.mock import patch
+        import razorpay.errors
+
+        with patch("payments.utils.client.payment.refund", side_effect=Exception("Razorpay gateway timeout")):
+            response = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "Change of mind"})
+            # Cancellation must still succeed for the user!
+            self.assertEqual(response.status_code, 200)
+
+            self.appointment.refresh_from_db()
+            self.assertEqual(self.appointment.status, "cancelled")
+
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.refund_error, "Razorpay gateway timeout")
