@@ -2,9 +2,15 @@ import os
 import sys
 from pathlib import Path
 from datetime import timedelta
-from decouple import config
+from decouple import config, Config, RepositoryEnv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Support loading alternate env files, e.g. .env.test for isolated testing
+env_file_name = os.environ.get('ENV_FILE') or ('.env.test' if os.environ.get('DJANGO_ENV') == 'test' else '.env')
+env_file_path = BASE_DIR / env_file_name
+if env_file_path.exists():
+    config = Config(RepositoryEnv(str(env_file_path)))
 
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-careconnect-fallback-secret-key-prod-9837')
 DEBUG = config('DEBUG', default=False, cast=bool)

@@ -229,3 +229,60 @@ class RazorpayWebhookRegressionTests(TestCase):
 
             self.payment.refresh_from_db()
             self.assertEqual(self.payment.status, "failed")
+
+
+class AdminRefundManagementTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            email="superadmin@careconnect.health", username="superadmin", password="AdminPass123!", role="admin", is_staff=True, is_verified=True
+        )
+        self.patient = User.objects.create_user(
+            email="regularpatient@test.com", username="regularpatient", password="PatientPass123!", role="patient", is_verified=True
+        )
+        self.doctor = Doctor.objects.create(
+            name="Dr. Refund Test", specialization="Cardiology", qualification="MBBS, MD",
+            experience_years=10, fee=Decimal('1000.00'), available_days="mon,tue,wed,thu,fri,sat,sun"
+        )
+        self.slot = Slot.objects.create(
+            doctor=self.doctor, date=date.today() + timedelta(days=2), start_time=time(10, 0), max_capacity=5
+        )
+        self.appointment = Appointment.objects.create(
+            patient=self.patient, doctor=self.doctor, slot=self.slot,
+            fee_charged=Decimal('1000.00'), refund_amount=Decimal('1000.00'), status='cancelled'
+        )
+        self.payment = Payment.objects.create(
+            appointment=self.appointment, patient=self.patient,
+            razorpay_order_id="order_failed_refund_123", razorpay_payment_id="pay_failed_refund_456",
+            amount=Decimal('1000.00'), status='paid', refund_status='failed', refund_error="Network timeout on gateway"
+        )
+
+    def test_admin_can_view_failed_refunds_list(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get("/api/payments/admin/failed-refunds/")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["payment_id"], self.payment.id)
+        self.assertEqual(data["results"][0]["refund_error"], "Network timeout on gateway")
+
+    def test_regular_patient_forbidden_from_admin_failed_refunds(self):
+        self.client.force_authenticate(user=self.patient)
+        res = self.client.get("/api/payments/admin/failed-refunds/")
+        self.assertEqual(res.status_code, 403)
+
+    def test_admin_can_retry_failed_refund_successfully(self):
+        from unittest.mock import patch
+        mock_refund_data = {"id": "rfnd_retry_success_999", "amount": 100000, "status": "processed"}
+
+        self.client.force_authenticate(user=self.admin)
+        with patch("payments.utils.client.payment.refund", return_value=mock_refund_data) as mock_refund:
+            res = self.client.post(f"/api/payments/admin/refunds/{self.payment.id}/retry/")
+            self.assertEqual(res.status_code, 200)
+            mock_refund.assert_called_once()
+
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.refund_status, 'processed')
+            self.assertEqual(self.payment.razorpay_refund_id, "rfnd_retry_success_999")
+            self.assertEqual(self.payment.refund_error, "")
+

@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, ROUND_HALF_UP
 import razorpay.errors
 from django.conf import settings
 from django.core.paginator import Paginator
@@ -29,7 +30,8 @@ class CreateOrderView(APIView):
         if hasattr(appointment, 'payment') and appointment.payment.status == 'paid':
             return Response({"error": "Already paid"}, status=status.HTTP_400_BAD_REQUEST)
 
-        amount_paise = int(appointment.fee_charged * 100)
+        from decimal import Decimal, ROUND_HALF_UP
+        amount_paise = int((appointment.fee_charged * Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
 
         order = client.order.create({
             "amount": amount_paise,
@@ -205,4 +207,111 @@ class RazorpayWebhookView(APIView):
                     return Response({"status": "refund_recorded", "event": event}, status=status.HTTP_200_OK)
 
         return Response({"status": "ignored", "event": event}, status=status.HTTP_200_OK)
+
+
+class AdminFailedRefundsListView(APIView):
+    """Admin view listing all payments whose gateway refund failed, for administrative audit and manual retry."""
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (request.user.role == 'admin' or request.user.is_superuser or request.user.is_staff):
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+        failed_payments = (
+            Payment.objects
+            .filter(refund_status='failed')
+            .select_related('appointment__doctor', 'patient')
+            .order_by('-updated_at')
+        )
+
+        results = []
+        for p in failed_payments:
+            results.append({
+                'payment_id': p.id,
+                'appointment_id': p.appointment.id if p.appointment else None,
+                'patient_name': p.patient.get_full_name() or p.patient.username,
+                'patient_email': p.patient.email,
+                'doctor_name': p.appointment.doctor.name if p.appointment and p.appointment.doctor else None,
+                'amount': str(p.amount),
+                'refund_amount': str(p.appointment.refund_amount) if p.appointment else str(p.amount),
+                'razorpay_payment_id': p.razorpay_payment_id,
+                'refund_status': p.refund_status,
+                'refund_error': p.refund_error,
+                'created_at': p.created_at.isoformat(),
+                'updated_at': p.updated_at.isoformat(),
+            })
+
+        return Response({
+            'count': len(results),
+            'results': results,
+        }, status=status.HTTP_200_OK)
+
+
+class AdminRetryRefundView(APIView):
+    """Admin endpoint to trigger a retry of a failed Razorpay gateway refund."""
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, payment_id):
+        if not (request.user.role == 'admin' or request.user.is_superuser or request.user.is_staff):
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.db import transaction
+        with transaction.atomic():
+            payment = (
+                Payment.objects
+                .select_for_update()
+                .select_related('appointment')
+                .filter(id=payment_id)
+                .first()
+            )
+            if not payment:
+                return Response({"error": "Payment record not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if payment.refund_status == 'processed':
+                return Response({"error": "Refund has already been processed successfully."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not payment.razorpay_payment_id:
+                return Response({"error": "No valid gateway transaction ID to refund."}, status=status.HTTP_400_BAD_REQUEST)
+
+            refund_amt = payment.appointment.refund_amount if payment.appointment else payment.amount
+            if not refund_amt or Decimal(str(refund_amt)) <= Decimal('0.00'):
+                return Response({"error": "Refund amount is zero; no gateway refund needed."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                refund_paise = int((Decimal(str(refund_amt)) * Decimal('100')).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+                refund_res = client.payment.refund(
+                    payment.razorpay_payment_id,
+                    {
+                        "amount": refund_paise,
+                        "notes": {
+                            "payment_id": str(payment.id),
+                            "appointment_id": str(payment.appointment.id) if payment.appointment else '',
+                            "retried_by": request.user.email,
+                            "idempotency_key": f"admin_retry_refund_{payment.id}_{payment.updated_at.timestamp()}"
+                        }
+                    }
+                )
+                payment.razorpay_refund_id = refund_res.get('id', '')
+                payment.refund_status = 'processed'
+                payment.status = 'refunded'
+                payment.refund_error = ''
+                payment.save(update_fields=['status', 'razorpay_refund_id', 'refund_status', 'refund_error', 'updated_at'])
+
+                return Response({
+                    "message": "Refund retried and processed successfully.",
+                    "refund_id": payment.razorpay_refund_id,
+                    "status": payment.refund_status
+                }, status=status.HTTP_200_OK)
+
+            except Exception as e:
+                payment.refund_status = 'failed'
+                payment.refund_error = str(e)
+                payment.save(update_fields=['refund_status', 'refund_error', 'updated_at'])
+                return Response({
+                    "error": f"Gateway refund retry failed: {str(e)}",
+                    "status": "failed"
+                }, status=status.HTTP_502_BAD_GATEWAY)
+
 

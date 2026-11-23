@@ -13,7 +13,7 @@ Key design decisions:
 """
 
 from datetime import datetime, timedelta, time as time_cls
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone
 from django.db.models import Count, Q
 
@@ -44,10 +44,10 @@ def calculate_fee(patient, doctor):
     
     if booking_number % 2 != 0:
         # Odd-numbered booking: 1st, 3rd, 5th, 7th... (+5% increase)
-        return (doctor.fee * Decimal('1.05')).quantize(Decimal('0.01'))
+        return (doctor.fee * Decimal('1.05')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     else:
         # Even-numbered booking: 2nd, 4th, 6th, 8th... (-5% discount)
-        return (doctor.fee * Decimal('0.95')).quantize(Decimal('0.01'))
+        return (doctor.fee * Decimal('0.95')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
 # ---------------------------------------------------------------------------

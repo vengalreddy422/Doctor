@@ -231,6 +231,7 @@ class Appointment(models.Model):
         """
         import datetime
         import zoneinfo
+        from decimal import Decimal, ROUND_HALF_UP
         from django.utils import timezone
 
         kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
@@ -267,8 +268,8 @@ class Appointment(models.Model):
             tier = 'Tier 4 (< 2 hrs): Non-Refundable Late Cancellation (100% Cut-off)'
             tier_code = 'tier_4_non_refundable'
 
-        deduction_amt = (fee * (deduct_pct / Decimal('100'))).quantize(Decimal('0.01'))
-        refund_amt = (fee * (refund_pct / Decimal('100'))).quantize(Decimal('0.01'))
+        deduction_amt = (fee * (deduct_pct / Decimal('100'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        refund_amt = (fee * (refund_pct / Decimal('100'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
         return {
             'hours_remaining': max(0, hours_remaining),
@@ -320,10 +321,10 @@ class Coupon(models.Model):
         return f"{self.code} ({self.title})"
 
     def calculate_discount(self, original_fee):
-        from decimal import Decimal
+        from decimal import Decimal, ROUND_HALF_UP
         original = Decimal(str(original_fee))
         if self.discount_type == 'percentage':
-            disc = (original * (self.discount_value / Decimal('100.00'))).quantize(Decimal('0.01'))
+            disc = (original * (self.discount_value / Decimal('100.00'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             if self.max_discount and disc > self.max_discount:
                 disc = self.max_discount
             return min(disc, original)
