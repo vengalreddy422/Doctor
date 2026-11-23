@@ -1,9 +1,11 @@
+import json
 import razorpay.errors
+from django.conf import settings
 from django.core.paginator import Paginator
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
@@ -121,3 +123,86 @@ class MyPaymentHistoryView(APIView):
             'has_previous': page_obj.has_previous(),
             'results': PaymentSerializer(page_obj.object_list, many=True).data,
         })
+
+
+class RazorpayWebhookView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        webhook_signature = request.headers.get('X-Razorpay-Signature') or request.META.get('HTTP_X_RAZORPAY_SIGNATURE')
+        if not webhook_signature:
+            return Response({"error": "Missing webhook signature"}, status=status.HTTP_400_BAD_REQUEST)
+
+        webhook_secret = getattr(settings, 'RAZORPAY_WEBHOOK_SECRET', '') or getattr(settings, 'RAZORPAY_KEY_SECRET', '')
+        webhook_body = request.body.decode('utf-8')
+
+        try:
+            client.utility.verify_webhook_signature(webhook_body, webhook_signature, webhook_secret)
+        except razorpay.errors.SignatureVerificationError:
+            return Response({"error": "Invalid webhook signature"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event_data = json.loads(webhook_body)
+        except Exception:
+            return Response({"error": "Invalid JSON body"}, status=status.HTTP_400_BAD_REQUEST)
+
+        event = event_data.get('event')
+        payload = event_data.get('payload', {})
+
+        if event == 'payment.captured':
+            payment_entity = payload.get('payment', {}).get('entity', {})
+            order_id = payment_entity.get('order_id')
+            payment_id = payment_entity.get('id')
+
+            if order_id:
+                payment = Payment.objects.filter(razorpay_order_id=order_id).first()
+                if payment:
+                    # Idempotency check: if already confirmed/paid, return 200 without duplicate action
+                    if payment.status == 'paid' and payment.appointment.status == 'confirmed':
+                        return Response({"status": "already_processed", "event": event}, status=status.HTTP_200_OK)
+
+                    payment.razorpay_payment_id = payment_id
+                    payment.status = 'paid'
+                    payment.save(update_fields=['status', 'razorpay_payment_id', 'updated_at'])
+
+                    payment.appointment.status = 'confirmed'
+                    payment.appointment.save(update_fields=['status', 'updated_at'])
+
+                    from django.core.cache import cache
+                    cache.clear()
+
+                    try:
+                        send_payment_confirmation(payment.appointment)
+                    except Exception as e:
+                        print(f"[-] Webhook email dispatch error: {e}")
+
+                    return Response({"status": "processed", "event": event}, status=status.HTTP_200_OK)
+
+        elif event == 'payment.failed':
+            payment_entity = payload.get('payment', {}).get('entity', {})
+            order_id = payment_entity.get('order_id')
+
+            if order_id:
+                payment = Payment.objects.filter(razorpay_order_id=order_id).first()
+                if payment and payment.status != 'paid':
+                    payment.status = 'failed'
+                    payment.save(update_fields=['status', 'updated_at'])
+                    return Response({"status": "failed_recorded", "event": event}, status=status.HTTP_200_OK)
+
+        elif event == 'refund.processed':
+            refund_entity = payload.get('refund', {}).get('entity', {})
+            payment_id = refund_entity.get('payment_id')
+            refund_id = refund_entity.get('id')
+
+            if payment_id:
+                payment = Payment.objects.filter(razorpay_payment_id=payment_id).first()
+                if payment:
+                    payment.status = 'refunded'
+                    if refund_id:
+                        payment.razorpay_refund_id = refund_id
+                    payment.save(update_fields=['status', 'razorpay_refund_id', 'updated_at'])
+                    return Response({"status": "refund_recorded", "event": event}, status=status.HTTP_200_OK)
+
+        return Response({"status": "ignored", "event": event}, status=status.HTTP_200_OK)
+

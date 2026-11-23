@@ -84,3 +84,128 @@ class PaymentCancellationRegressionTests(TestCase):
 
             self.payment.refresh_from_db()
             self.assertEqual(self.payment.refund_error, "Razorpay gateway timeout")
+
+
+class RazorpayWebhookRegressionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.patient = User.objects.create_user(
+            email="webhook_pat@example.com", username="webhook_pat", password="Password123!", is_verified=True
+        )
+        self.doctor = Doctor.objects.create(
+            name="Dr. Webhook", specialization="Pediatrics", qualification="MBBS",
+            experience_years=8, fee=Decimal('500.00'), available_days="mon,tue,wed,thu,fri,sat,sun"
+        )
+        self.slot = Slot.objects.create(
+            doctor=self.doctor, date=date.today() + timedelta(days=3), start_time=time(11, 0), max_capacity=5
+        )
+        self.appointment = Appointment.objects.create(
+            patient=self.patient, doctor=self.doctor, slot=self.slot,
+            fee_charged=Decimal('500.00'), status='pending'
+        )
+        self.payment = Payment.objects.create(
+            appointment=self.appointment,
+            patient=self.patient,
+            razorpay_order_id="order_wh_123",
+            amount=Decimal('500.00'),
+            status='created'
+        )
+
+    def test_webhook_missing_signature_returns_400(self):
+        response = self.client.post("/api/payments/webhook/", {"event": "payment.captured"}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Missing webhook signature", response.data["error"])
+
+    def test_webhook_invalid_signature_returns_400(self):
+        import razorpay.errors
+        from unittest.mock import patch
+
+        with patch("payments.utils.client.utility.verify_webhook_signature", side_effect=razorpay.errors.SignatureVerificationError("Bad sig")):
+            response = self.client.post(
+                "/api/payments/webhook/",
+                {"event": "payment.captured"},
+                format="json",
+                HTTP_X_RAZORPAY_SIGNATURE="invalid_sig"
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Invalid webhook signature", response.data["error"])
+
+    def test_webhook_payment_captured_happy_path_and_idempotency(self):
+        """Valid payment.captured confirms pending appointment even if browser was closed."""
+        from unittest.mock import patch
+
+        payload = {
+            "event": "payment.captured",
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": "pay_captured_999",
+                        "order_id": "order_wh_123",
+                        "amount": 50000,
+                        "status": "captured"
+                    }
+                }
+            }
+        }
+
+        with patch("payments.utils.client.utility.verify_webhook_signature", return_value=True), \
+             patch("appointments.notifications.send_email", return_value=True) as mock_email:
+            # First delivery
+            response1 = self.client.post(
+                "/api/payments/webhook/",
+                payload,
+                format="json",
+                HTTP_X_RAZORPAY_SIGNATURE="valid_sig_123"
+            )
+            self.assertEqual(response1.status_code, 200)
+            self.assertEqual(response1.data["status"], "processed")
+
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.status, "paid")
+            self.assertEqual(self.payment.razorpay_payment_id, "pay_captured_999")
+
+            self.appointment.refresh_from_db()
+            self.assertEqual(self.appointment.status, "confirmed")
+            mock_email.assert_called_once()
+
+            # Second duplicate delivery (Idempotency)
+            response2 = self.client.post(
+                "/api/payments/webhook/",
+                payload,
+                format="json",
+                HTTP_X_RAZORPAY_SIGNATURE="valid_sig_123"
+            )
+            self.assertEqual(response2.status_code, 200)
+            self.assertEqual(response2.data["status"], "already_processed")
+            # Email must NOT be called a second time
+            self.assertEqual(mock_email.call_count, 1)
+
+    def test_webhook_payment_failed_records_status(self):
+        from unittest.mock import patch
+
+        payload = {
+            "event": "payment.failed",
+            "payload": {
+                "payment": {
+                    "entity": {
+                        "id": "pay_failed_111",
+                        "order_id": "order_wh_123",
+                        "amount": 50000,
+                        "status": "failed"
+                    }
+                }
+            }
+        }
+
+        with patch("payments.utils.client.utility.verify_webhook_signature", return_value=True):
+            response = self.client.post(
+                "/api/payments/webhook/",
+                payload,
+                format="json",
+                HTTP_X_RAZORPAY_SIGNATURE="valid_sig_123"
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data["status"], "failed_recorded")
+
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.status, "failed")
