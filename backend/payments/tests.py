@@ -85,6 +85,26 @@ class PaymentCancellationRegressionTests(TestCase):
             self.payment.refresh_from_db()
             self.assertEqual(self.payment.refund_error, "Razorpay gateway timeout")
 
+    def test_cancel_appointment_double_click_idempotency_prevents_duplicate_refund(self):
+        """Regression test for BUG-C04: Repeated cancellation calls do not invoke Razorpay refund API twice."""
+        from unittest.mock import patch
+        mock_refund_response = {"id": "rfnd_test_idempotent", "amount": 100000, "status": "processed"}
+
+        with patch("payments.utils.client.payment.refund", return_value=mock_refund_response) as mock_refund:
+            # 1st cancel request
+            res1 = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "1st cancellation"})
+            self.assertEqual(res1.status_code, 200)
+            self.assertEqual(mock_refund.call_count, 1)
+
+            # 2nd concurrent/repeated cancel request
+            res2 = self.client.post(f"/api/appointments/cancel/{self.appointment.id}/", {"reason": "Duplicate cancellation"})
+            self.assertEqual(res2.status_code, 400)
+            self.assertIn("already been cancelled", res2.json()["error"].lower())
+
+            # Refund API MUST NOT be called a second time
+            self.assertEqual(mock_refund.call_count, 1)
+
+
 
 class RazorpayWebhookRegressionTests(TestCase):
     def setUp(self):

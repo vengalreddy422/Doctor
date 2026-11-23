@@ -393,23 +393,34 @@ class CancelAppointmentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, appointment_id):
-        try:
-            appointment = Appointment.objects.select_related('slot', 'doctor', 'patient').get(
-                id=appointment_id, patient=request.user
-            )
-        except Appointment.DoesNotExist:
-            return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        if not appointment.is_cancellable:
-            return Response(
-                {"error": f"Cannot cancel an appointment with status '{appointment.get_status_display()}'."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         reason = request.data.get('reason', 'Patient schedule change / personal reason').strip()
-        refund_info = appointment.calculate_cancellation_refund()
 
         with transaction.atomic():
+            try:
+                appointment = (
+                    Appointment.objects
+                    .select_for_update()
+                    .select_related('slot', 'doctor', 'patient')
+                    .get(id=appointment_id, patient=request.user)
+                )
+            except Appointment.DoesNotExist:
+                return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            # Idempotency check: if appointment is already cancelled, prevent double refund
+            if appointment.status == 'cancelled':
+                return Response(
+                    {"error": "This appointment has already been cancelled. No duplicate refund will be initiated."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not appointment.is_cancellable:
+                return Response(
+                    {"error": f"Cannot cancel an appointment with status '{appointment.get_status_display()}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            refund_info = appointment.calculate_cancellation_refund()
+
             appointment.status = 'cancelled'
             appointment.cancelled_by = 'patient'
             appointment.cancellation_reason = reason
@@ -426,11 +437,12 @@ class CancelAppointmentView(APIView):
                 'cancelled_at', 'updated_at'
             ])
 
-            # Update linked payment status and trigger Razorpay refund API if eligible
-            payment = Payment.objects.filter(appointment=appointment).first()
+            # Update linked payment status and trigger Razorpay refund API if eligible (with idempotency lock)
+            payment = Payment.objects.select_for_update().filter(appointment=appointment).first()
             if payment:
                 refund_amt = Decimal(refund_info['refund_amount'])
-                if refund_amt > Decimal('0.00') and payment.razorpay_payment_id:
+                already_refunded = bool(payment.razorpay_refund_id or payment.status == 'refunded' or getattr(payment, 'refund_status', None) == 'processed')
+                if refund_amt > Decimal('0.00') and payment.razorpay_payment_id and not already_refunded:
                     try:
                         from payments.utils import client as razorpay_client
                         refund_paise = int(refund_amt * 100)
@@ -441,19 +453,22 @@ class CancelAppointmentView(APIView):
                                 "notes": {
                                     "appointment_id": str(appointment.id),
                                     "receipt_id": str(appointment.receipt_id),
+                                    "idempotency_key": f"refund_appt_{appointment.id}",
                                     "reason": reason
                                 }
                             }
                         )
                         payment.razorpay_refund_id = refund_res.get('id', '')
+                        payment.refund_status = 'processed'
                         payment.status = 'refunded' if Decimal(refund_info['deduction_amount']) == Decimal('0.00') else 'partially_refunded'
                         payment.refund_error = ''
                     except Exception as refund_err:
+                        payment.refund_status = 'failed'
                         payment.refund_error = str(refund_err)
                         print(f"[-] Razorpay refund API call failed: {refund_err}")
-                elif refund_amt > Decimal('0.00'):
+                elif refund_amt > Decimal('0.00') and not already_refunded:
                     payment.status = 'refunded'
-                payment.save(update_fields=['status', 'razorpay_refund_id', 'refund_error', 'updated_at'])
+                payment.save(update_fields=['status', 'razorpay_refund_id', 'refund_status', 'refund_error', 'updated_at'])
 
             # Invalidate slots and dashboard caches for immediate live updates
             from django.core.cache import cache
