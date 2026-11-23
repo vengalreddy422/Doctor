@@ -189,11 +189,17 @@ class Appointment(models.Model):
         return f'MC-{date_str}-{short_uuid}'
 
     def get_hours_until_slot(self):
-        """Calculate exact hours remaining until appointment slot start."""
+        """Calculate exact hours remaining until appointment slot start in Asia/Kolkata timezone."""
         import datetime
+        import zoneinfo
         from django.utils import timezone
-        slot_dt = timezone.make_aware(datetime.datetime.combine(self.slot.date, self.slot.start_time))
-        diff = slot_dt - timezone.now()
+        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        slot_dt = timezone.make_aware(
+            datetime.datetime.combine(self.slot.date, self.slot.start_time),
+            timezone=kolkata_tz
+        )
+        now_dt = timezone.now().astimezone(kolkata_tz)
+        diff = slot_dt - now_dt
         return diff.total_seconds() / 3600.0
 
     def check_reschedule_eligibility(self):
@@ -224,10 +230,15 @@ class Appointment(models.Model):
         - < 2 Hours or Past: 0% Non-Refundable (100% deduction)
         """
         import datetime
+        import zoneinfo
         from django.utils import timezone
 
-        slot_dt = timezone.make_aware(datetime.datetime.combine(self.slot.date, self.slot.start_time))
-        now_dt = timezone.now()
+        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        slot_dt = timezone.make_aware(
+            datetime.datetime.combine(self.slot.date, self.slot.start_time),
+            timezone=kolkata_tz
+        )
+        now_dt = timezone.now().astimezone(kolkata_tz)
 
         diff = slot_dt - now_dt
         total_seconds = diff.total_seconds()

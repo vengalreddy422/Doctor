@@ -376,5 +376,49 @@ class CouponSystemTests(TestCase):
         self.assertEqual(res2.status_code, 400)
         self.assertIn("already redeemed", res2.json()["error"].lower())
 
+    def test_cancellation_refund_timezone_asia_kolkata(self):
+        """Regression test for BUG-C02: Verify 4-tier refund calculation uses Asia/Kolkata timezone awareness."""
+        import zoneinfo
+        from django.utils import timezone
+        kolkata = zoneinfo.ZoneInfo("Asia/Kolkata")
+        now_kolkata = timezone.now().astimezone(kolkata)
+
+        # Create slot 30 hours in the future (Tier 1: 100% refund)
+        dt_future = now_kolkata + timedelta(hours=30)
+        slot_t1 = Slot.objects.create(doctor=self.doctor, date=dt_future.date(), start_time=dt_future.time(), max_capacity=5)
+        appt_t1 = Appointment.objects.create(patient=self.user, doctor=self.doctor, slot=slot_t1, fee_charged=Decimal("500.00"), status='confirmed')
+        r1 = appt_t1.calculate_cancellation_refund()
+        self.assertEqual(r1['tier_code'], 'tier_1_full')
+        self.assertEqual(Decimal(str(r1['refund_amount'])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(r1['deduction_amount'])), Decimal("0.00"))
+
+        # Create slot 18 hours in the future (Tier 2: 75% refund)
+        dt_t2 = now_kolkata + timedelta(hours=18)
+        slot_t2 = Slot.objects.create(doctor=self.doctor, date=dt_t2.date(), start_time=dt_t2.time(), max_capacity=5)
+        appt_t2 = Appointment.objects.create(patient=self.user, doctor=self.doctor, slot=slot_t2, fee_charged=Decimal("500.00"), status='confirmed')
+        r2 = appt_t2.calculate_cancellation_refund()
+        self.assertEqual(r2['tier_code'], 'tier_2_standard')
+        self.assertEqual(Decimal(str(r2['refund_amount'])), Decimal("375.00"))
+        self.assertEqual(Decimal(str(r2['deduction_amount'])), Decimal("125.00"))
+
+        # Create slot 6 hours in the future (Tier 3: 50% refund)
+        dt_t3 = now_kolkata + timedelta(hours=6)
+        slot_t3 = Slot.objects.create(doctor=self.doctor, date=dt_t3.date(), start_time=dt_t3.time(), max_capacity=5)
+        appt_t3 = Appointment.objects.create(patient=self.user, doctor=self.doctor, slot=slot_t3, fee_charged=Decimal("500.00"), status='confirmed')
+        r3 = appt_t3.calculate_cancellation_refund()
+        self.assertEqual(r3['tier_code'], 'tier_3_short_notice')
+        self.assertEqual(Decimal(str(r3['refund_amount'])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(r3['deduction_amount'])), Decimal("250.00"))
+
+        # Create slot 1 hour in the future (Tier 4: 0% refund)
+        dt_t4 = now_kolkata + timedelta(hours=1)
+        slot_t4 = Slot.objects.create(doctor=self.doctor, date=dt_t4.date(), start_time=dt_t4.time(), max_capacity=5)
+        appt_t4 = Appointment.objects.create(patient=self.user, doctor=self.doctor, slot=slot_t4, fee_charged=Decimal("500.00"), status='confirmed')
+        r4 = appt_t4.calculate_cancellation_refund()
+        self.assertEqual(r4['tier_code'], 'tier_4_non_refundable')
+        self.assertEqual(Decimal(str(r4['refund_amount'])), Decimal("0.00"))
+        self.assertEqual(Decimal(str(r4['deduction_amount'])), Decimal("500.00"))
+
+
 
 
