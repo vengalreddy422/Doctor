@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import date, time
+from datetime import date, time, timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from doctors.models import Doctor
@@ -349,5 +349,32 @@ class CouponSystemTests(TestCase):
         })
         self.assertEqual(res.status_code, 400)
         self.assertIn("requires at least 5", res.json()["error"])
+
+    def test_milestone_coupon_cannot_be_reused_once_redeemed(self):
+        """Regression test for BUG-C01: Once LOYALTY5 is used on 5th booking, it cannot be reused on 6th booking."""
+        for i in range(5):
+            s = Slot.objects.create(doctor=self.doctor, date=date.today(), start_time=time(8 + i, 0), max_capacity=5)
+            Appointment.objects.create(
+                patient=self.user, doctor=self.doctor, slot=s,
+                fee_charged=self.doctor.fee, status='completed'
+            )
+
+        self.client.force_authenticate(user=self.user)
+        # 1st booking with LOYALTY5 succeeds
+        res1 = self.client.post("/api/appointments/book/", {
+            "slot_id": self.slot.id,
+            "coupon_code": "LOYALTY5"
+        })
+        self.assertEqual(res1.status_code, 201)
+
+        # 2nd booking attempting to reuse LOYALTY5 must be rejected
+        slot2 = Slot.objects.create(doctor=self.doctor, date=date.today() + timedelta(days=2), start_time=time(15, 0), max_capacity=5)
+        res2 = self.client.post("/api/appointments/book/", {
+            "slot_id": slot2.id,
+            "coupon_code": "LOYALTY5"
+        })
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn("already redeemed", res2.json()["error"].lower())
+
 
 

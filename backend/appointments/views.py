@@ -17,7 +17,7 @@ from doctors.models import Doctor, Hospital
 from doctors.serializers import DoctorSerializer
 from payments.models import Payment
 from payments.serializers import PaymentSerializer
-from .models import Slot, Appointment, Coupon
+from .models import Slot, Appointment, Coupon, CouponUsage
 from .serializers import (
     BookAppointmentSerializer, AppointmentSerializer,
     RescheduleAppointmentSerializer, CouponSerializer
@@ -80,7 +80,10 @@ class AvailableCouponsView(APIView):
             is_eligible = True
             lock_reason = ""
 
-            if coupon.coupon_type == 'first_booking':
+            if coupon.coupon_type in ['first_booking', 'milestone'] and CouponUsage.objects.filter(user=request.user, coupon=coupon).exists():
+                is_eligible = False
+                lock_reason = "Already redeemed on a previous booking"
+            elif coupon.coupon_type == 'first_booking':
                 if b_count > 0:
                     is_eligible = False
                     lock_reason = "Only valid for 1st booking"
@@ -158,6 +161,9 @@ class ValidateCouponView(APIView):
 
         stats = get_user_booking_stats(request.user)
         b_count = stats['booking_count']
+
+        if coupon.coupon_type in ['first_booking', 'milestone'] and CouponUsage.objects.filter(user=request.user, coupon=coupon).exists():
+            return Response({"error": f"You have already redeemed milestone coupon '{code}'."}, status=status.HTTP_400_BAD_REQUEST)
 
         if coupon.coupon_type == 'first_booking' and b_count > 0:
             return Response({"error": "This coupon is only valid for your very 1st booking."}, status=status.HTTP_400_BAD_REQUEST)
@@ -251,6 +257,9 @@ class BookAppointmentView(APIView):
                 stats = get_user_booking_stats(request.user)
                 b_count = stats['booking_count']
 
+                if coupon.coupon_type in ['first_booking', 'milestone'] and CouponUsage.objects.filter(user=request.user, coupon=coupon).exists():
+                    return Response({"error": f"You have already redeemed milestone offer '{coupon.code}'."}, status=status.HTTP_400_BAD_REQUEST)
+
                 if coupon.coupon_type == 'first_booking' and b_count > 0:
                     return Response({"error": "Coupon 'FIRSTCARE' is only valid on your 1st booking."}, status=status.HTTP_400_BAD_REQUEST)
                 if coupon.required_bookings > 0 and b_count < coupon.required_bookings:
@@ -279,6 +288,9 @@ class BookAppointmentView(APIView):
                 status='pending',
                 notes=notes,
             )
+
+            if coupon_code and coupon:
+                CouponUsage.objects.get_or_create(user=request.user, coupon=coupon, defaults={'appointment': appointment})
 
             # Invalidate slots and dashboard stats caches for immediate live updates
             from django.core.cache import cache

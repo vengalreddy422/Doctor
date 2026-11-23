@@ -319,3 +319,21 @@ class Coupon(models.Model):
         else: # flat
             disc = Decimal(str(self.discount_value))
             return min(disc, original)
+
+
+class CouponUsage(models.Model):
+    """Tracks per-user redemption of coupons to prevent reuse of milestone / one-time offers."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='coupon_usages')
+    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name='usages')
+    appointment = models.ForeignKey('Appointment', on_delete=models.SET_NULL, null=True, blank=True, related_name='coupon_usages')
+    used_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-used_at']
+        unique_together = ('user', 'coupon')
+        verbose_name = 'Coupon Usage'
+        verbose_name_plural = 'Coupon Usages'
+
+    def __str__(self):
+        return f"{self.user.username} used {self.coupon.code} on {self.used_at}"
+
