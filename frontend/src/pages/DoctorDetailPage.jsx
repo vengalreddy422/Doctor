@@ -228,6 +228,13 @@ const DoctorDetailPage = () => {
     } catch (err) {
       const errMsg = err.response?.data?.error || err.response?.data?.detail || 'Booking failed. Please try again.';
       setAlertInfo({ type: 'error', message: errMsg });
+      toast.error(errMsg);
+      // Re-fetch slots immediately so button displays full or updated booked count
+      if (selectedDate && id) {
+        api.get(`/doctors/${id}/slots/`, { params: { date: selectedDate } })
+          .then(res => setSlots(res.data || []))
+          .catch(() => {});
+      }
       closeBookingModal();
     } finally {
       setBookingLoading(false);
@@ -516,43 +523,62 @@ const DoctorDetailPage = () => {
                   {slots.length > 0 ? (
                     slots.map((slot) => {
                       const maxCap = slot.max_capacity || 5;
-                      const bookedCount = slot.booked || 0;
+                      const bookedCount = slot.booked ?? slot.booked_count ?? 0;
                       const isFull = slot.is_full || bookedCount >= maxCap;
+                      const isBlocked = slot.is_blocked;
+                      const isPast = slot.is_past;
+                      const isDisabled = isFull || isBlocked || isPast;
+
+                      let statusBadge = `🟢 Available (${bookedCount}/${maxCap})`;
+                      let buttonTitle = `Available: ${maxCap - bookedCount} of ${maxCap} slots remaining`;
+
+                      if (isBlocked) {
+                        statusBadge = `🔒 Unavailable`;
+                        buttonTitle = `This time slot is temporarily blocked or unavailable.`;
+                      } else if (isFull) {
+                        statusBadge = `🔴 Full (${bookedCount}/${maxCap})`;
+                        buttonTitle = `This time slot is completely full (5/5 appointments filled). Booking is not possible.`;
+                      } else if (isPast) {
+                        statusBadge = `⏰ Passed`;
+                        buttonTitle = `This slot time has already passed.`;
+                      }
+
                       return (
                         <button
                           key={slot.id}
                           type="button"
-                          onClick={() => openBookingModal(slot)}
-                          className={`slot-btn ${isFull ? 'slot-full' : ''}`}
-                          disabled={isFull}
+                          onClick={() => !isDisabled && openBookingModal(slot)}
+                          className={`slot-btn ${isFull ? 'slot-full' : ''} ${isBlocked ? 'slot-blocked' : ''}`}
+                          disabled={isDisabled}
                           style={{
                             display: 'flex',
                             flexDirection: 'column',
                             alignItems: 'center',
-                            gap: '2px',
-                            padding: '8px 10px',
-                            borderRadius: '8px',
-                            border: isFull ? '1.5px solid #fca5a5' : '1.5px solid #bbf7d0',
-                            background: isFull ? '#fef2f2' : '#f0fdf4',
-                            cursor: isFull ? 'not-allowed' : 'pointer',
-                            opacity: isFull ? 0.75 : 1,
-                            position: 'relative'
+                            gap: '3px',
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            border: isBlocked ? '1.5px dashed #cbd5e1' : isFull ? '1.5px solid #fca5a5' : '1.5px solid #86efac',
+                            background: isBlocked ? '#f8fafc' : isFull ? '#fff1f2' : '#f0fdf4',
+                            cursor: isDisabled ? 'not-allowed' : 'pointer',
+                            opacity: isDisabled ? 0.72 : 1,
+                            position: 'relative',
+                            transition: 'all 0.2s ease',
                           }}
-                          title={isFull ? 'This slot is full (5/5 patients booked). Please choose another slot.' : `Available: ${bookedCount}/${maxCap} booked`}
+                          title={buttonTitle}
                         >
-                          <strong style={{ fontSize: '0.92rem', color: isFull ? '#991b1b' : '#166534' }}>
+                          <strong style={{ fontSize: '0.94rem', color: isBlocked ? '#64748b' : isFull ? '#991b1b' : '#15803d', fontWeight: 700 }}>
                             {slot.start_time} {slot.end_time ? `- ${slot.end_time}` : ''}
                           </strong>
                           <span
                             className="slot-label"
                             style={{
-                              fontSize: '0.7rem',
+                              fontSize: '0.72rem',
                               fontWeight: 700,
-                              color: isFull ? '#dc2626' : '#15803d',
+                              color: isBlocked ? '#64748b' : isFull ? '#dc2626' : '#16a34a',
                               whiteSpace: 'nowrap'
                             }}
                           >
-                            {isFull ? `🔴 Full (${bookedCount}/${maxCap}) - Choose another` : `🟢 Available (${bookedCount}/${maxCap})`}
+                            {statusBadge}
                           </span>
                         </button>
                       );

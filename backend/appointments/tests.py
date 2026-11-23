@@ -11,11 +11,13 @@ User = get_user_model()
 
 class SlotCapacityTests(TestCase):
     def setUp(self):
+        from datetime import timedelta
+        self.future_date = date.today() + timedelta(days=2)
         self.doctor = Doctor.objects.create(
             name="Test Doctor", specialization="General", qualification="MBBS",
-            experience_years=5, fee=Decimal('500.00'), available_days="mon,tue"
+            experience_years=5, fee=Decimal('500.00'), available_days="mon,tue,wed,thu,fri,sat,sun"
         )
-        self.slot = Slot.objects.create(doctor=self.doctor, date=date.today(), start_time=time(10, 0), max_capacity=5)
+        self.slot = Slot.objects.create(doctor=self.doctor, date=self.future_date, start_time=time(10, 0), max_capacity=5)
 
     def _make_appointment(self, i, status='confirmed'):
         patient = User.objects.create_user(email=f"patient{i}@test.com", username=f"p{i}", password="pass1234", is_verified=True)
@@ -36,6 +38,104 @@ class SlotCapacityTests(TestCase):
         for i in range(1, 5):
             self._make_appointment(i)
         self.assertFalse(self.slot.is_full())
+
+    def test_booking_fails_when_all_5_slots_filled_friendly_error(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        # Fill all 5 slots
+        for i in range(5):
+            self._make_appointment(i)
+
+        # 6th patient attempts to book
+        patient6 = User.objects.create_user(
+            email="patient6@test.com", username="p6", password="pass1234", is_verified=True
+        )
+        client.force_authenticate(user=patient6)
+        res = client.post("/api/appointments/book/", {
+            "slot_id": self.slot.id,
+            "patient_name": "Sixth Patient",
+            "notes": "Testing slot capacity exceeded"
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("5 of 5 slots filled", res.data["error"])
+        self.assertIn("Booking is not possible for this session", res.data["error"])
+
+    def test_booking_succeeds_when_slot_has_fewer_than_5_bookings(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        # 4 slots filled
+        for i in range(4):
+            self._make_appointment(i)
+
+        # 5th patient books -> Should succeed
+        patient5 = User.objects.create_user(
+            email="patient5@test.com", username="p5", password="pass1234", is_verified=True
+        )
+        client.force_authenticate(user=patient5)
+        res = client.post("/api/appointments/book/", {
+            "slot_id": self.slot.id,
+            "patient_name": "Fifth Patient"
+        })
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(self.slot.booked_count(), 5)
+        self.assertTrue(self.slot.is_full())
+
+    def test_booking_fails_when_slot_is_blocked_friendly_error(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        self.slot.is_blocked = True
+        self.slot.save()
+
+        patient = User.objects.create_user(
+            email="blocked_test@test.com", username="blocked_test", password="pass1234", is_verified=True
+        )
+        client.force_authenticate(user=patient)
+        res = client.post("/api/appointments/book/", {
+            "slot_id": self.slot.id,
+            "patient_name": "Blocked Patient"
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("temporarily unavailable or blocked", res.data["error"])
+
+    def test_reschedule_fails_when_target_slot_is_full_friendly_error(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+
+        # Slot 1 for patient (in future)
+        slot1 = Slot.objects.create(doctor=self.doctor, date=self.future_date, start_time=time(14, 0), max_capacity=5)
+        patient = User.objects.create_user(
+            email="reschedule_p@test.com", username="resched_p", password="pass1234", is_verified=True
+        )
+        appt = Appointment.objects.create(
+            patient=patient, doctor=self.doctor, slot=slot1, fee_charged=Decimal("500.00"), status='confirmed'
+        )
+
+        # Target slot (self.slot) is filled with 5 appointments
+        for i in range(5):
+            self._make_appointment(i)
+
+        client.force_authenticate(user=patient)
+        res = client.post(f"/api/appointments/reschedule/{appt.id}/", {
+            "new_slot_id": self.slot.id,
+            "reason": "Want earlier time"
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("completely booked", res.data["error"])
+
+    def test_hospital_dashboard_stats_api_loads_successfully(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        admin_user = User.objects.create_user(
+            email="admin_hosp@test.com", username="adminhosp", password="pass1234", role="admin", is_verified=True
+        )
+        client.force_authenticate(user=admin_user)
+        res = client.get("/api/appointments/hospital/stats/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("metrics", res.data)
+        self.assertIn("total_patients", res.data["metrics"])
+        self.assertIn("traffic_trend", res.data)
+
+
 
 
 class FeeCalculationTests(TestCase):

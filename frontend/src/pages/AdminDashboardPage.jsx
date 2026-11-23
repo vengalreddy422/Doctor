@@ -53,6 +53,7 @@ const AdminDashboardPage = () => {
   const [selectedDoctorSpec, setSelectedDoctorSpec] = useState('');
   const [selectedHospital, setSelectedHospital] = useState('');
   const [doctorAvailability, setDoctorAvailability] = useState('all');
+  const [doctorDayFilter, setDoctorDayFilter] = useState('all'); // 'all' | 'today' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
   const [doctorPage, setDoctorPage] = useState(1);
   const [doctorPageSize, setDoctorPageSize] = useState(10);
 
@@ -69,16 +70,26 @@ const AdminDashboardPage = () => {
   // Patient tab filters & pagination
   const [patientSearch, setPatientSearch] = useState('');
   const [patientFilterType, setPatientFilterType] = useState('all'); // 'all' | 'verified' | 'with_phone'
+  const [patientDateFilter, setPatientDateFilter] = useState('all'); // 'all' | 'today' | 'week' | 'month'
   const [selectedPatientModal, setSelectedPatientModal] = useState(null);
   const [patientPage, setPatientPage] = useState(1);
   const [patientPageSize, setPatientPageSize] = useState(12);
 
-
   // Appointment tab filters & pagination
   const [appointmentSearch, setAppointmentSearch] = useState('');
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState('all');
+  const [appointmentDateFilter, setAppointmentDateFilter] = useState('all'); // 'all' | 'today' | 'tomorrow' | 'past_7' | 'next_7' | 'this_month' | 'custom'
+  const [appointmentCustomDate, setAppointmentCustomDate] = useState('');
   const [appointmentPage, setAppointmentPage] = useState(1);
   const [appointmentPageSize, setAppointmentPageSize] = useState(10);
+
+  // Payment Ledger filtering state (Centralized Admin)
+  const [paymentDateFilter, setPaymentDateFilter] = useState('all'); // 'all' | 'today' | 'yesterday' | 'past_7' | 'this_month' | 'custom'
+  const [paymentCustomDate, setPaymentCustomDate] = useState('');
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState('all'); // 'all' | 'paid' | 'refunded'
+  const [paymentSearch, setPaymentSearch] = useState('');
+  const [paymentPage, setPaymentPage] = useState(1);
+  const [paymentPageSize, setPaymentPageSize] = useState(10);
 
   // Dynamic Hospitals List state
   const [adminHospitals, setAdminHospitals] = useState([]);
@@ -135,20 +146,26 @@ const AdminDashboardPage = () => {
   const [rescheduleLoading, setRescheduleLoading] = useState(false);
   const [fetchingDatesSlots, setFetchingDatesSlots] = useState(false);
 
-  const fetchAdminStats = async (isManualRefresh = false) => {
-    if (isManualRefresh) setRefreshing(true);
-    else setLoading(true);
+  const fetchAdminStats = async (isManualRefresh = false, silent = false) => {
+    if (!silent) {
+      if (isManualRefresh) setRefreshing(true);
+      else setLoading(true);
+    }
     try {
-      const res = await api.get(`/appointments/admin/stats/${isManualRefresh ? '?refresh=true' : ''}`);
+      const res = await api.get(`/appointments/admin/stats/?refresh=true`);
       setStats(res.data);
-      if (isManualRefresh) {
-        setAlertInfo({ type: 'success', message: 'Dashboard statistics refreshed successfully!' });
+      if (isManualRefresh && !silent) {
+        setAlertInfo({ type: 'success', message: 'Dashboard statistics refreshed successfully with latest data!' });
       }
     } catch (err) {
-      setAlertInfo({ type: 'error', message: 'Failed to load admin dashboard statistics.' });
+      if (!silent) {
+        setAlertInfo({ type: 'error', message: 'Failed to load admin dashboard statistics.' });
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!silent) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -295,7 +312,7 @@ const AdminDashboardPage = () => {
   // Background auto-refresh polling every 25s for live booking and slot capacity synchronization
   useEffect(() => {
     const timer = setInterval(() => {
-      fetchAdminStats(true);
+      fetchAdminStats(false, true);
       if (activeTab === 'slots') {
         fetchAdminSlots();
       }
@@ -309,7 +326,14 @@ const AdminDashboardPage = () => {
     try {
       await api.delete(`/doctors/admin/${id}/`);
       setAlertInfo({ type: 'success', message: `Dr. ${name} has been removed successfully!` });
-      fetchAdminStats(true);
+      setStats(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          doctors_stats: (prev.doctors_stats || []).filter(d => d.doctor_id !== id),
+        };
+      });
+      fetchAdminStats(false, true);
     } catch (err) {
       setAlertInfo({ type: 'error', message: 'Failed to delete doctor. Check if active appointments exist.' });
     }
@@ -405,25 +429,51 @@ const AdminDashboardPage = () => {
   };
 
   const handleToggleDoctorActive = async (id, currentActive, name) => {
+    // Instant optimistic state update
+    setStats(prev => {
+      if (!prev) return prev;
+      const updatedDocs = (prev.doctors_stats || []).map(d =>
+        d.doctor_id === id ? { ...d, is_active: !currentActive } : d
+      );
+      return { ...prev, doctors_stats: updatedDocs };
+    });
     try {
       await api.patch(`/doctors/admin/${id}/`, { is_active: !currentActive });
       setAlertInfo({
         type: 'success',
         message: `Dr. ${name} marked as ${!currentActive ? 'Active' : 'Inactive'}.`
       });
-      fetchAdminStats(true);
+      fetchAdminStats(false, true);
     } catch (err) {
       setAlertInfo({ type: 'error', message: 'Failed to update doctor status.' });
+      fetchAdminStats(false, true);
     }
   };
 
   const handleUpdateStatus = async (apptId, newStatus) => {
+    // Instant optimistic state update across all appointment lists and counters
+    setStats(prev => {
+      if (!prev) return prev;
+      const updatedAll = (prev.all_appointments || []).map(a =>
+        a.id === apptId ? { ...a, status: newStatus } : a
+      );
+      const updatedRecent = (prev.recent_appointments || []).map(a =>
+        a.id === apptId ? { ...a, status: newStatus } : a
+      );
+      return {
+        ...prev,
+        all_appointments: updatedAll,
+        recent_appointments: updatedRecent,
+      };
+    });
+
     try {
       await api.patch(`/appointments/admin/${apptId}/status/`, { status: newStatus });
-      setAlertInfo({ type: 'success', message: `Appointment status updated to ${newStatus.toUpperCase()}.` });
-      fetchAdminStats(true);
+      setAlertInfo({ type: 'success', message: `Appointment status updated to ${newStatus.toUpperCase()} successfully.` });
+      fetchAdminStats(false, true);
     } catch (err) {
-      setAlertInfo({ type: 'error', message: 'Failed to update status.' });
+      setAlertInfo({ type: 'error', message: err.response?.data?.error || 'Failed to update status.' });
+      fetchAdminStats(false, true);
     }
   };
 
@@ -433,7 +483,7 @@ const AdminDashboardPage = () => {
       const res = await api.post(`/appointments/admin/slots/${slotId}/toggle-block/`);
       setAlertInfo({ type: 'success', message: res.data.message });
       fetchAdminSlots();
-      fetchAdminStats(true);
+      fetchAdminStats(false, true);
     } catch (err) {
       setAlertInfo({ type: 'error', message: 'Failed to toggle slot block status.' });
     }
@@ -583,7 +633,15 @@ const AdminDashboardPage = () => {
     else if (doctorAvailability === 'active') matchesAvail = Boolean(d.is_active);
     else if (doctorAvailability === 'inactive') matchesAvail = !d.is_active;
 
-    return matchesSearch && matchesSpec && matchesHospital && matchesAvail;
+    let matchesDay = true;
+    if (doctorDayFilter === 'today') {
+      matchesDay = Boolean(d.is_available_today);
+    } else if (doctorDayFilter !== 'all') {
+      const days = (d.available_days || '').toLowerCase();
+      matchesDay = days.includes(doctorDayFilter.toLowerCase());
+    }
+
+    return matchesSearch && matchesSpec && matchesHospital && matchesAvail && matchesDay;
   });
 
   const totalDoctorPages = Math.ceil(filteredDoctors.length / doctorPageSize) || 1;
@@ -606,6 +664,20 @@ const AdminDashboardPage = () => {
     if (!matchesSearch) return false;
     if (patientFilterType === 'verified') return p.is_verified;
     if (patientFilterType === 'with_phone') return Boolean(p.phone);
+
+    if (patientDateFilter !== 'all' && p.date_joined) {
+      const jDate = p.date_joined.split('T')[0];
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (patientDateFilter === 'today') {
+        if (jDate !== todayStr) return false;
+      } else if (patientDateFilter === 'week') {
+        const past7 = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        if (jDate < past7 || jDate > todayStr) return false;
+      } else if (patientDateFilter === 'month') {
+        if (!jDate.startsWith(todayStr.substring(0, 7))) return false;
+      }
+    }
+
     return true;
   });
   const totalPatientPages = Math.ceil(filteredPatients.length / patientPageSize) || 1;
@@ -613,7 +685,6 @@ const AdminDashboardPage = () => {
     (patientPage - 1) * patientPageSize,
     patientPage * patientPageSize
   );
-
 
   // Appointment Filtering
   const filteredAppointments = (stats?.all_appointments || []).filter((appt) => {
@@ -626,13 +697,75 @@ const AdminDashboardPage = () => {
 
     const matchesStatus = appointmentStatusFilter === 'all' || appt.status === appointmentStatusFilter;
 
-    return matchesSearch && matchesStatus;
+    let matchesDate = true;
+    const apptDate = appt.slot_date;
+    if (apptDate) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      if (appointmentDateFilter === 'today') {
+        matchesDate = apptDate === todayStr;
+      } else if (appointmentDateFilter === 'tomorrow') {
+        matchesDate = apptDate === tomorrowStr;
+      } else if (appointmentDateFilter === 'past_7') {
+        const past7 = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        matchesDate = apptDate >= past7 && apptDate <= todayStr;
+      } else if (appointmentDateFilter === 'next_7') {
+        const next7 = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+        matchesDate = apptDate >= todayStr && apptDate <= next7;
+      } else if (appointmentDateFilter === 'this_month') {
+        matchesDate = apptDate.startsWith(todayStr.substring(0, 7));
+      } else if (appointmentDateFilter === 'custom' && appointmentCustomDate) {
+        matchesDate = apptDate === appointmentCustomDate;
+      }
+    }
+
+    return matchesSearch && matchesStatus && matchesDate;
   });
 
   const totalApptPages = Math.ceil(filteredAppointments.length / appointmentPageSize) || 1;
   const paginatedAppointments = filteredAppointments.slice(
     (appointmentPage - 1) * appointmentPageSize,
     appointmentPage * appointmentPageSize
+  );
+
+  // Centralized Payments Filtering
+  const filteredPayments = (stats?.payments_list || []).filter((p) => {
+    const q = paymentSearch.trim().toLowerCase();
+    const matchesSearch = !q ||
+      (p.patient_name || '').toLowerCase().includes(q) ||
+      (p.razorpay_order_id || '').toLowerCase().includes(q) ||
+      (p.razorpay_payment_id || '').toLowerCase().includes(q) ||
+      (p.doctor_name || '').toLowerCase().includes(q);
+
+    const matchesStatus = paymentStatusFilter === 'all' || p.status === paymentStatusFilter;
+
+    let matchesDate = true;
+    if (p.created_at) {
+      const pDate = p.created_at.split('T')[0];
+      const todayStr = new Date().toISOString().split('T')[0];
+      const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+      if (paymentDateFilter === 'today') {
+        matchesDate = pDate === todayStr;
+      } else if (paymentDateFilter === 'yesterday') {
+        matchesDate = pDate === yesterdayStr;
+      } else if (paymentDateFilter === 'past_7') {
+        const past7 = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        matchesDate = pDate >= past7 && pDate <= todayStr;
+      } else if (paymentDateFilter === 'this_month') {
+        matchesDate = pDate.startsWith(todayStr.substring(0, 7));
+      } else if (paymentDateFilter === 'custom' && paymentCustomDate) {
+        matchesDate = pDate === paymentCustomDate;
+      }
+    }
+
+    return matchesSearch && matchesStatus && matchesDate;
+  });
+
+  const totalPaymentPages = Math.ceil(filteredPayments.length / paymentPageSize) || 1;
+  const paginatedPayments = filteredPayments.slice(
+    (paymentPage - 1) * paymentPageSize,
+    paymentPage * paymentPageSize
   );
 
   // Hospital list filtering
@@ -643,9 +776,9 @@ const AdminDashboardPage = () => {
   const totalHospitalsCount = Object.keys(stats?.hospital_stats || {}).length;
 
   return (
-    <div style={{ display: 'flex', minHeight: 'calc(100vh - 72px)', background: 'var(--c-bg)' }}>
+    <div className="admin-layout-container">
       {/* SIDEBAR NAVIGATION */}
-      <aside style={{ width: '260px', background: '#fff', borderRight: '1px solid var(--c-border)', display: 'flex', flexDirection: 'column', padding: '1.25rem' }}>
+      <aside className="admin-sidebar" style={{ background: '#fff', color: '#1e293b', borderRight: '1px solid var(--c-border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem 1.25rem', borderBottom: '1px solid var(--c-border)', marginBottom: '1.25rem' }}>
           <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: 'var(--color-primary-subtle)', color: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Award size={22} />
@@ -811,7 +944,7 @@ const AdminDashboardPage = () => {
       </aside>
 
       {/* MAIN VIEWPORT */}
-      <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+      <main className="admin-content-viewport">
         {/* HEADER */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
@@ -1963,6 +2096,43 @@ const AdminDashboardPage = () => {
               </select>
             </div>
 
+            {/* DAY OF WEEK FILTER BAR */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap', padding: '0.65rem 0.85rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Calendar size={13} style={{ color: '#0284c7' }} /> Doctor Day of Week:
+              </span>
+              {[
+                { id: 'all', label: 'All Days' },
+                { id: 'today', label: '🟢 Available Today' },
+                { id: 'mon', label: 'Mon' },
+                { id: 'tue', label: 'Tue' },
+                { id: 'wed', label: 'Wed' },
+                { id: 'thu', label: 'Thu' },
+                { id: 'fri', label: 'Fri' },
+                { id: 'sat', label: 'Sat' },
+                { id: 'sun', label: 'Sun' },
+              ].map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => { setDoctorDayFilter(d.id); setDoctorPage(1); }}
+                  style={{
+                    padding: '3px 10px',
+                    borderRadius: '16px',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: doctorDayFilter === d.id ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                    background: doctorDayFilter === d.id ? '#0284c7' : '#ffffff',
+                    color: doctorDayFilter === d.id ? '#ffffff' : '#334155',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+
             {/* DOCTOR TABLE */}
             <div className="table-responsive">
               <table className="payment-table">
@@ -2546,7 +2716,7 @@ const AdminDashboardPage = () => {
             </div>
 
             {/* Status Pills */}
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
               {['all', 'pending', 'confirmed', 'completed', 'cancelled', 'rescheduled'].map((st) => (
                 <button
                   key={st}
@@ -2567,6 +2737,63 @@ const AdminDashboardPage = () => {
                   {st} {st !== 'all' && `(${stats?.status_breakdown?.[st] || 0})`}
                 </button>
               ))}
+            </div>
+
+            {/* DAY-WISE APPOINTMENT FILTER BAR */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap', padding: '0.65rem 0.85rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Calendar size={13} style={{ color: '#0284c7' }} /> Consultation Day:
+              </span>
+              {[
+                { id: 'all', label: 'All Days' },
+                { id: 'today', label: 'Today' },
+                { id: 'tomorrow', label: 'Tomorrow' },
+                { id: 'past_7', label: 'Past 7 Days' },
+                { id: 'next_7', label: 'Next 7 Days' },
+                { id: 'this_month', label: 'This Month' },
+              ].map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => { setAppointmentDateFilter(d.id); setAppointmentPage(1); }}
+                  style={{
+                    padding: '3px 10px',
+                    borderRadius: '16px',
+                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    border: appointmentDateFilter === d.id ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                    background: appointmentDateFilter === d.id ? '#0284c7' : '#ffffff',
+                    color: appointmentDateFilter === d.id ? '#ffffff' : '#334155',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {d.label}
+                </button>
+              ))}
+
+              <input
+                type="date"
+                value={appointmentCustomDate}
+                onChange={(e) => {
+                  setAppointmentCustomDate(e.target.value);
+                  if (e.target.value) {
+                    setAppointmentDateFilter('custom');
+                    setAppointmentPage(1);
+                  }
+                }}
+                style={{ height: '30px', padding: '0 8px', borderRadius: '14px', border: appointmentDateFilter === 'custom' ? '2px solid #0284c7' : '1px solid #cbd5e1', fontSize: '0.76rem', background: '#fff' }}
+                title="Select specific consultation date"
+              />
+              {appointmentDateFilter === 'custom' && (
+                <button
+                  type="button"
+                  onClick={() => { setAppointmentDateFilter('all'); setAppointmentCustomDate(''); setAppointmentPage(1); }}
+                  style={{ fontSize: '0.75rem', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  ✕ Clear
+                </button>
+              )}
             </div>
 
             <div className="table-responsive">
@@ -2747,7 +2974,7 @@ const AdminDashboardPage = () => {
             </div>
 
             {/* Filter Pills */}
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center' }}>
               {[
                 { id: 'all', label: 'All Accounts' },
                 { id: 'verified', label: 'Verified Accounts Only' },
@@ -2769,6 +2996,34 @@ const AdminDashboardPage = () => {
                   }}
                 >
                   {f.label}
+                </button>
+              ))}
+
+              <span style={{ margin: '0 4px', color: '#cbd5e1' }}>|</span>
+
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Joined:</span>
+              {[
+                { id: 'all', label: 'All Time' },
+                { id: 'today', label: 'Today' },
+                { id: 'week', label: 'This Week' },
+                { id: 'month', label: 'This Month' },
+              ].map((df) => (
+                <button
+                  key={df.id}
+                  type="button"
+                  onClick={() => { setPatientDateFilter(df.id); setPatientPage(1); }}
+                  style={{
+                    border: '1px solid #cbd5e1',
+                    background: patientDateFilter === df.id ? '#0284c7' : '#fff',
+                    color: patientDateFilter === df.id ? '#fff' : '#475569',
+                    padding: '0.3rem 0.75rem',
+                    borderRadius: '16px',
+                    fontSize: '0.76rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {df.label}
                 </button>
               ))}
             </div>
@@ -2976,13 +3231,130 @@ const AdminDashboardPage = () => {
         {/* ============================================================ */}
         {/* TAB 7: PAYMENTS */}
         {/* ============================================================ */}
+        {/* ============================================================ */}
+        {/* TAB 7: PAYMENTS & CENTRALIZED FINANCIAL LEDGER */}
+        {/* ============================================================ */}
         {activeTab === 'payments' && (
           <div className="card" style={{ padding: '1.5rem' }}>
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--c-navy)' }}>Financial Transaction Ledger</h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--c-text-light)' }}>Audit real-time consultation fees, Razorpay order IDs, and payment verification receipts.</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--c-navy)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <CreditCard size={22} style={{ color: '#059669' }} /> Centralized Financial Ledger & Master Transactions
+                </h3>
+                <p style={{ fontSize: '0.82rem', color: 'var(--c-text-light)', margin: '0.25rem 0 0' }}>
+                  Network-wide consultation revenues, Razorpay transaction reconciliations, patient receipts, and 100% full refund logs.
+                </p>
+              </div>
+
+              {/* SEARCH INPUT */}
+              <div style={{ position: 'relative', width: '280px' }}>
+                <Search size={16} style={{ position: 'absolute', left: '10px', top: '10px', color: 'var(--c-text-light)' }} />
+                <input
+                  type="text"
+                  placeholder="Order ID, Payment ID, Patient..."
+                  value={paymentSearch}
+                  onChange={(e) => { setPaymentSearch(e.target.value); setPaymentPage(1); }}
+                  style={{ width: '100%', paddingLeft: '32px', paddingRight: '12px', height: '36px', borderRadius: '8px', border: '1px solid var(--c-border)', fontSize: '0.85rem' }}
+                />
+              </div>
             </div>
 
+            {/* FINANCIAL SUMMARY CARDS */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '12px', padding: '1rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#047857', textTransform: 'uppercase' }}>Centralized Net Revenue</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#065f46', marginTop: '2px' }}>₹{stats?.total_revenue || '0.00'}</div>
+                <span style={{ fontSize: '0.72rem', color: '#059669' }}>After processed full refunds</span>
+              </div>
+
+              <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '12px', padding: '1rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase' }}>Gross Consultation Collections</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#1e40af', marginTop: '2px' }}>₹{stats?.total_collected || '0.00'}</div>
+                <span style={{ fontSize: '0.72rem', color: '#2563eb' }}>All patient transactions processed</span>
+              </div>
+
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '1rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#b91c1c', textTransform: 'uppercase' }}>Total Refunds Dispatched</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#991b1b', marginTop: '2px' }}>₹{stats?.total_refunded || '0.00'}</div>
+                <span style={{ fontSize: '0.72rem', color: '#dc2626' }}>100% full refund guarantees</span>
+              </div>
+
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '1rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase' }}>Filtered Transactions</span>
+                <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>{filteredPayments.length}</div>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Ledger records matched</span>
+              </div>
+            </div>
+
+            {/* DAY-WISE & STATUS FILTER CONTROLS */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem', padding: '0.75rem 1rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
+                  <Calendar size={13} style={{ color: '#0284c7', display: 'inline', marginRight: '3px' }} />
+                  Day Filter:
+                </span>
+                {[
+                  { id: 'all', label: 'All Time' },
+                  { id: 'today', label: 'Today' },
+                  { id: 'yesterday', label: 'Yesterday' },
+                  { id: 'past_7', label: 'Past 7 Days' },
+                  { id: 'this_month', label: 'This Month' },
+                ].map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => { setPaymentDateFilter(d.id); setPaymentPage(1); }}
+                    className={`filter-pill-btn ${paymentDateFilter === d.id ? 'active' : ''}`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+
+                <input
+                  type="date"
+                  value={paymentCustomDate}
+                  onChange={(e) => {
+                    setPaymentCustomDate(e.target.value);
+                    if (e.target.value) {
+                      setPaymentDateFilter('custom');
+                      setPaymentPage(1);
+                    }
+                  }}
+                  style={{ height: '32px', padding: '0 8px', borderRadius: '16px', border: paymentDateFilter === 'custom' ? '2px solid #0284c7' : '1px solid #cbd5e1', fontSize: '0.78rem', background: '#fff' }}
+                  title="Filter by specific date"
+                />
+                {paymentDateFilter === 'custom' && (
+                  <button
+                    type="button"
+                    onClick={() => { setPaymentDateFilter('all'); setPaymentCustomDate(''); setPaymentPage(1); }}
+                    style={{ fontSize: '0.75rem', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    ✕ Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>Status:</span>
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'paid', label: 'Paid' },
+                  { id: 'refunded', label: 'Refunded' },
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => { setPaymentStatusFilter(st.id); setPaymentPage(1); }}
+                    className={`filter-pill-btn ${paymentStatusFilter === st.id ? 'active' : ''}`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* TRANSACTIONS TABLE */}
             <div className="table-responsive">
               <table className="payment-table">
                 <thead>
@@ -2992,44 +3364,117 @@ const AdminDashboardPage = () => {
                     <th>Settlement Amount</th>
                     <th>Status</th>
                     <th style={{ textAlign: 'right' }}>Timestamp</th>
+                    <th style={{ textAlign: 'center' }}>Tax Invoice</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stats?.payments_list?.length > 0 ? (
-                    stats.payments_list.map((p) => (
+                  {paginatedPayments.length > 0 ? (
+                    paginatedPayments.map((p) => (
                       <tr key={p.id}>
-                        <td style={{ fontWeight: 'bold' }}>{p.patient_name || 'Patient'}</td>
+                        <td>
+                          <div style={{ fontWeight: 800, color: 'var(--c-navy)' }}>
+                            {p.patient_name || 'Patient User'}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--c-text-light)' }}>
+                            Payment ID: #{p.id} {p.patient_email ? `· ${p.patient_email}` : ''}
+                          </div>
+                        </td>
                         <td>
                           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--c-text-light)' }}>
                             Order: {p.razorpay_order_id}
                           </div>
                           {p.razorpay_payment_id && (
-                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--c-emerald)' }}>
-                              Payment: {p.razorpay_payment_id}
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: '#059669', fontWeight: 600 }}>
+                              Pay ID: {p.razorpay_payment_id}
                             </div>
                           )}
                         </td>
-                        <td style={{ fontWeight: 700, color: 'var(--c-emerald)', fontSize: '0.95rem' }}>₹{p.amount}</td>
                         <td>
-                          <span className={`status-badge ${p.status === 'paid' ? 'status-confirmed' : 'status-cancelled'}`}>
+                          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: p.status === 'refunded' ? '#dc2626' : '#059669' }}>
+                            {p.status === 'refunded' ? `₹0 (Refunded ₹${p.amount})` : `₹${p.amount}`}
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`status-badge ${p.status === 'paid' ? 'status-confirmed' : 'status-refunded'}`}>
                             {p.status ? p.status.toUpperCase() : 'PENDING'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'right', fontSize: '0.78rem', color: 'var(--c-text-light)', fontFamily: 'var(--font-mono)' }}>
-                          {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'Recent'}
+                        <td style={{ textAlign: 'right', fontSize: '0.78rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                          <div>{p.created_at ? new Date(p.created_at).toLocaleDateString() : 'Recent'}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--c-text-light)' }}>
+                            {p.created_at ? new Date(p.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInvoice(p.appointment || p)}
+                            className="btn btn-outline btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            title="View Official Medical Tax Invoice"
+                          >
+                            🧾 Invoice
+                          </button>
                         </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--c-text-light)' }}>
-                        No transactions recorded yet.
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '3rem', color: 'var(--c-text-light)' }}>
+                        No transactions recorded matching the selected filter criteria.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+
+            {/* TRANSACTIONS PAGINATION */}
+            {filteredPayments.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--c-border)', flexWrap: 'wrap', gap: '1rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--c-text-light)' }}>
+                  Showing <strong>{(paymentPage - 1) * paymentPageSize + 1}–{Math.min(filteredPayments.length, paymentPage * paymentPageSize)}</strong> of <strong>{filteredPayments.length}</strong> Transactions
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <select
+                    value={paymentPageSize}
+                    onChange={(e) => { setPaymentPageSize(Number(e.target.value)); setPaymentPage(1); }}
+                    style={{ fontSize: '0.8rem', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--c-border)', background: '#fff' }}
+                  >
+                    <option value={10}>10 / page</option>
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                  </select>
+
+                  {totalPaymentPages > 1 && (
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentPage((p) => Math.max(1, p - 1))}
+                        disabled={paymentPage === 1}
+                        className="btn btn-sm btn-outline"
+                        style={{ padding: '0.25rem 0.5rem' }}
+                      >
+                        <ChevronLeft size={14} /> Prev
+                      </button>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600, padding: '0.25rem 0.5rem', display: 'flex', alignItems: 'center' }}>
+                        {paymentPage} / {totalPaymentPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentPage((p) => Math.min(totalPaymentPages, p + 1))}
+                        disabled={paymentPage === totalPaymentPages}
+                        className="btn btn-sm btn-outline"
+                        style={{ padding: '0.25rem 0.5rem' }}
+                      >
+                        Next <ChevronRight size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

@@ -1,3 +1,4 @@
+import hashlib
 from decimal import Decimal
 from rest_framework import generics, status
 from rest_framework.views import APIView
@@ -215,9 +216,15 @@ class BookAppointmentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if slot.is_full():
+            if slot.is_blocked:
                 return Response(
-                    {"error": "This slot is full. Maximum 5 patients per slot reached. Please choose another."},
+                    {"error": "This time slot is temporarily unavailable or blocked by the clinic. Please select an alternate time slot."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if slot.booked_count() >= slot.max_capacity:
+                return Response(
+                    {"error": f"This time slot is completely booked ({slot.max_capacity} of {slot.max_capacity} slots filled). Booking is not possible for this session. Please select another convenient time slot."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -452,10 +459,10 @@ class RescheduleAppointmentView(APIView):
                 new_slot = get_object_or_404(Slot.objects.select_for_update().select_related('doctor'), id=new_slot_id)
                 if new_slot.is_past():
                     return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)
-                if new_slot.is_full():
-                    return Response({"error": "The selected slot is full (5/5 appointments booked). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
                 if new_slot.is_blocked:
-                    return Response({"error": "The selected slot is blocked by hospital administration."}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": "The selected slot is temporarily blocked by hospital administration. Please choose an active slot."}, status=status.HTTP_400_BAD_REQUEST)
+                if new_slot.booked_count() >= new_slot.max_capacity:
+                    return Response({"error": f"The selected slot is completely booked ({new_slot.max_capacity} of {new_slot.max_capacity} appointments filled). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
 
                 appointment.slot = new_slot
                 appointment.status = 'confirmed'
@@ -969,10 +976,10 @@ class AdminRescheduleAppointmentView(APIView):
 
             if new_slot.is_past():
                 return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)
-            if new_slot.is_full():
-                return Response({"error": "The selected target slot is full (5/5 patients booked). Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
             if new_slot.is_blocked:
-                return Response({"error": "The selected target slot is blocked/unavailable."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "The selected target slot is blocked/unavailable. Please choose an active slot."}, status=status.HTTP_400_BAD_REQUEST)
+            if new_slot.booked_count() >= new_slot.max_capacity:
+                return Response({"error": f"The selected target slot is fully booked ({new_slot.max_capacity} of {new_slot.max_capacity} patients filled). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
 
             old_slot_info = f"{appointment.slot.date} at {appointment.slot.start_time.strftime('%H:%M')}"
             
@@ -1086,6 +1093,8 @@ class AdminDashboardStatsView(APIView):
                 'is_active': doctor.is_active,
                 'is_available_today': is_avail_today,
                 'available_days': doctor.available_days,
+                'available_days_list': avail_days_list,
+                'image': doctor.image.url if (doctor.image and hasattr(doctor.image, 'url')) else (str(doctor.image) if doctor.image else None),
             })
 
         # Calculate revenue and occupancy rates per hospital
@@ -1105,26 +1114,35 @@ class AdminDashboardStatsView(APIView):
             .order_by('-created_at')[:10]
         )
 
-        patients_list = list(User.objects.filter(role='patient').order_by('-date_joined')[:50])
-        payments_list = list(
+        patients_list = list(User.objects.filter(role='patient').order_by('-date_joined')[:100])
+        payments_qs = (
             Payment.objects.all()
             .select_related('patient', 'appointment', 'appointment__doctor', 'appointment__slot')
-            .order_by('-created_at')[:50]
+            .order_by('-created_at')
         )
+        pay_metrics = payments_qs.aggregate(
+            collected=Sum('amount', filter=Q(status='paid')),
+            refunded=Sum('amount', filter=Q(status='refunded')),
+        )
+        payments_list = list(payments_qs[:200])
+
         all_appointments = list(
             Appointment.objects.all()
             .select_related('patient', 'doctor', 'doctor__hospital', 'slot')
-            .order_by('-slot__date', '-slot__start_time')[:100]
+            .order_by('-slot__date', '-slot__start_time')[:250]
         )
 
-        rev_agg = Payment.objects.filter(status='paid').aggregate(total=Sum('amount'))
-        total_revenue = rev_agg['total'] or Decimal('0.00')
+        total_collected = pay_metrics['collected'] or Decimal('0.00')
+        total_refunded = pay_metrics['refunded'] or Decimal('0.00')
+        total_revenue = max(Decimal('0.00'), total_collected - total_refunded)
 
         payload = {
-            'total_patients': len(patients_list) if len(patients_list) < 50 else User.objects.filter(role='patient').count(),
+            'total_patients': User.objects.filter(role='patient').count(),
             'total_doctors': len(doctors_stats),
             'total_appointments': sum(status_breakdown.values()),
             'total_revenue': str(total_revenue),
+            'total_collected': str(total_collected),
+            'total_refunded': str(total_refunded),
             'status_breakdown': status_breakdown,
             'specializations': sorted(list(specializations_set)),
             'doctors_stats': doctors_stats,
@@ -1396,8 +1414,33 @@ class HospitalDashboardStatsView(APIView):
             'maps_url': target_hospital_obj.get_google_maps_url() if target_hospital_obj else 'https://www.google.com/maps',
         }
 
+        # Hospital Centralized Financial Payments & Ledger (Scoped to this facility's doctors)
+        hospital_payments_qs = Payment.objects.filter(
+            appointment__doctor_id__in=doc_ids
+        ).select_related('patient', 'appointment', 'appointment__doctor', 'appointment__slot').order_by('-created_at')
+
+        h_pay_metrics = hospital_payments_qs.aggregate(
+            collected=Sum('amount', filter=Q(status='paid')),
+            refunded=Sum('amount', filter=Q(status='refunded')),
+        )
+        h_collected = h_pay_metrics['collected'] or Decimal('0.00')
+        h_refunded = h_pay_metrics['refunded'] or Decimal('0.00')
+        h_net = max(Decimal('0.00'), h_collected - h_refunded)
+
+        hospital_payments = list(hospital_payments_qs[:150])
+
         active_doctors_count = sum(1 for d in hospital_doctors if d.is_active)
         total_doctors_count = len(hospital_doctors)
+
+        # Hospital role isolation: Hospital staff cannot view all other hospitals
+        if user.role == 'hospital':
+            all_hospitals_data = [{
+                'id': target_hospital_obj.id if target_hospital_obj else None,
+                'name': target_hospital_name,
+                'slug': target_hospital_obj.slug if target_hospital_obj else 'careconnect',
+                'city': target_hospital_obj.city if target_hospital_obj else '',
+                'address': target_hospital_obj.address if target_hospital_obj else '',
+            }] if target_hospital_obj else []
 
         payload = {
             'hospital_name': target_hospital_name,
@@ -1411,7 +1454,9 @@ class HospitalDashboardStatsView(APIView):
                 'confirmed_count': confirmed_count,
                 'pending_count': pending_count,
                 'cancelled_count': cancelled_count,
-                'total_revenue': str(total_revenue),
+                'total_revenue': str(h_net),
+                'total_collected': str(h_collected),
+                'total_refunded': str(h_refunded),
                 'active_doctors_count': active_doctors_count,
                 'total_doctors_count': total_doctors_count,
                 'occupancy_rate': occupancy_rate,
@@ -1421,6 +1466,7 @@ class HospitalDashboardStatsView(APIView):
             'appointments': AppointmentSerializer(filtered_appts, many=True).data,
             'doctors': DoctorSerializer(hospital_doctors, many=True, context={'request': request}).data,
             'slots': slots_list,
+            'payments': PaymentSerializer(hospital_payments, many=True).data,
         }
         cache.set(cache_key, payload, timeout=30)
         return Response(payload)
