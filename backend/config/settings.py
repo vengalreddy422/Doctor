@@ -195,6 +195,20 @@ REST_FRAMEWORK = {
         'accounts.authentication.FastCachedJWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/minute',
+        'user': '1000/minute',
+        'register': '10/minute',
+        'resend_otp': '5/minute',
+        'forgot_password': '5/minute',
+        'login': '20/minute',
+        'verify_otp': '15/minute',
+    }
 }
 
 SIMPLE_JWT = {

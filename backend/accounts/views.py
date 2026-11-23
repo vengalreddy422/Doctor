@@ -37,6 +37,7 @@ def generate_safe_username(name, email):
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'register'
 
     def post(self, request):
         email = request.data.get('email', '').strip().lower()
@@ -103,6 +104,7 @@ class RegisterView(APIView):
 
 class VerifyOTPView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'verify_otp'
 
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
@@ -161,6 +163,7 @@ class VerifyOTPView(APIView):
 
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'resend_otp'
 
     def post(self, request):
         email = request.data.get('email', '').strip().lower()
@@ -209,6 +212,7 @@ class CancelRegistrationView(APIView):
 
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'forgot_password'
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
@@ -264,6 +268,7 @@ class ResetPasswordView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'login'
 
     def post(self, request):
         login_input = request.data.get('email', '').strip().lower()

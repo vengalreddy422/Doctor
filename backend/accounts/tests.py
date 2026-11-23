@@ -78,6 +78,8 @@ class OTPTests(TestCase):
 
 class AuthSignupLoginTests(TestCase):
     def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
         self.client = APIClient()
 
     def test_signup_success(self):
@@ -237,5 +239,25 @@ class AuthSignupLoginTests(TestCase):
             "password": "NewSecurePassword456!",
         })
         self.assertEqual(res4.status_code, 200)
+
+    def test_drf_rate_throttling_on_forgot_password(self):
+        """Regression test for 2.d: DRF scoped rate throttle triggers 429 when threshold exceeded."""
+        from django.core.cache import cache
+        cache.clear()
+
+        user = User.objects.create_user(
+            email="throttle_test@example.com", username="throttletest", password="Password123!", is_verified=True
+        )
+
+        # Rate limit for forgot_password is 5/minute. Requests 1..5 succeed.
+        for i in range(5):
+            res = self.client.post("/api/accounts/forgot-password/", {"email": "throttle_test@example.com"})
+            self.assertEqual(res.status_code, 200, f"Request {i+1} failed with status {res.status_code}")
+
+        # 6th request triggers 429 Too Many Requests
+        res6 = self.client.post("/api/accounts/forgot-password/", {"email": "throttle_test@example.com"})
+        self.assertEqual(res6.status_code, 429)
+        self.assertIn("Request was throttled", res6.data["detail"])
+
 
 
