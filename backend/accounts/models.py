@@ -32,6 +32,7 @@ class User(AbstractUser):
     otp_attempts = models.PositiveIntegerField(default=0)
     failed_login_attempts = models.PositiveIntegerField(default=0)
     lockout_until = models.DateTimeField(blank=True, null=True)
+    must_change_password = models.BooleanField(default=False, help_text='Require user to change password on first login')
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']

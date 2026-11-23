@@ -66,16 +66,17 @@ def ensure_hospital_entity_and_account(hospital_name, default_password="hospital
             is_verified=True,
             is_active=True,
             first_name=hospital_obj.name[:30],
+            must_change_password=True,
         )
     else:
+        # Crucial security fix: Never overwrite password of existing hospital user accounts
         user.role = 'hospital'
         user.hospital = hospital_obj
         user.hospital_name = hospital_obj.name
         user.hospital_slug = hospital_obj.slug
         user.is_verified = True
         user.is_active = True
-        user.set_password(default_password)
-        user.save()
+        user.save(update_fields=['role', 'hospital', 'hospital_name', 'hospital_slug', 'is_verified', 'is_active'])
 
     return hospital_obj, user
 

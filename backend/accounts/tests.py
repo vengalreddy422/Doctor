@@ -259,5 +259,31 @@ class AuthSignupLoginTests(TestCase):
         self.assertEqual(res6.status_code, 429)
         self.assertIn("Request was throttled", res6.data["detail"])
 
+    def test_setup_hospital_accounts_never_overwrites_existing_password(self):
+        """Regression test for 2.e: Provisioning never overwrites existing staff passwords and forces change on initial creation."""
+        from accounts.management.commands.setup_hospital_accounts import ensure_hospital_entity_and_account
+        from django.contrib.auth import authenticate
+
+        hosp_name = "Apollo Specialized Regression Center"
+        # 1. First run creates account with must_change_password=True
+        hosp_obj, user = ensure_hospital_entity_and_account(hosp_name, default_password="hospital@123")
+        self.assertTrue(user.must_change_password)
+        self.assertTrue(user.check_password("hospital@123"))
+
+        # 2. Staff changes password to a custom strong password
+        user.set_password("MyCustomHospitalPass#999")
+        user.must_change_password = False
+        user.save()
+
+        # 3. Admin re-runs setup_hospital_accounts
+        hosp_obj2, user2 = ensure_hospital_entity_and_account(hosp_name, default_password="hospital@123")
+        user2.refresh_from_db()
+
+        # Verify custom password was NOT overwritten!
+        self.assertTrue(user2.check_password("MyCustomHospitalPass#999"))
+        self.assertFalse(user2.check_password("hospital@123"))
+        self.assertFalse(user2.must_change_password)
+
+
 
 

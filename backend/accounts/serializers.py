@@ -31,10 +31,10 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'email', 'username', 'first_name', 'last_name',
-            'role', 'hospital_name', 'hospital_slug', 'phone', 'is_verified', 'gender', 'birthday',
+            'role', 'hospital_name', 'hospital_slug', 'phone', 'is_verified', 'must_change_password', 'gender', 'birthday',
             'address', 'profile_image', 'profile_image_url', 'date_joined', 'date_joined_formatted', 'total_bookings'
         )
-        read_only_fields = ('role', 'hospital_name', 'hospital_slug', 'is_verified', 'profile_image_url', 'date_joined', 'date_joined_formatted', 'total_bookings')
+        read_only_fields = ('role', 'hospital_name', 'hospital_slug', 'is_verified', 'must_change_password', 'profile_image_url', 'date_joined', 'date_joined_formatted', 'total_bookings')
 
     def get_profile_image_url(self, obj):
         if obj.profile_image:

@@ -262,6 +262,7 @@ class ResetPasswordView(APIView):
         user.set_password(new_password)
         user.failed_login_attempts = 0
         user.lockout_until = None
+        user.must_change_password = False
         user.save()
         return Response({"message": "Password reset successfully! You can now log in with your new password."})
 
@@ -376,6 +377,7 @@ class LoginView(APIView):
             "refresh": str(refresh),
             "access": str(refresh.access_token),
             "user": UserSerializer(user).data,
+            "must_change_password": getattr(user, 'must_change_password', False),
             "message": f"Welcome back, {user.first_name or user.username}!"
         })
 
