@@ -44,19 +44,19 @@ for email, username, pwd, role, is_staff in users_to_ensure:
 
 # Ensure Coupons
 coupons_data = [
-    ("WELCOME50", "Welcome 50% Off", "percentage", 50.00, 500.00, False),
-    ("FLAT100", "Flat Rs 100 Off", "flat", 100.00, None, False),
-    ("LOYALTY20", "Milestone 20% Off", "percentage", 20.00, 300.00, True),
+    ("WELCOME50", "Welcome 50% Off", "percentage", 50.00, 500.00, "first_booking"),
+    ("FLAT100", "Flat Rs 100 Off", "flat", 100.00, None, "general"),
+    ("LOYALTY20", "Milestone 20% Off", "percentage", 20.00, 300.00, "milestone"),
 ]
 
-for code, title, disc_type, val, max_disc, is_mile in coupons_data:
+for code, title, disc_type, val, max_disc, c_type in coupons_data:
     c, created = Coupon.objects.get_or_create(code=code, defaults={
         "title": title,
         "discount_type": disc_type,
         "discount_value": val,
         "max_discount": max_disc,
         "is_active": True,
-        "is_milestone": is_mile
+        "coupon_type": c_type
     })
     print(f"[{'CREATED' if created else 'VERIFIED'}] Coupon: {code} ({disc_type} {val})")
 
