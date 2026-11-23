@@ -21,7 +21,9 @@ urlpatterns = [
     path('my-appointments/', MyAppointmentsView.as_view(), name='api_my_appointments'),
     path('cancel-preview/<int:appointment_id>/', CancellationPreviewView.as_view(), name='api_cancellation_preview'),
     path('cancel/<int:appointment_id>/', CancelAppointmentView.as_view(), name='api_cancel_appointment'),
+    path('<int:appointment_id>/cancel/', CancelAppointmentView.as_view(), name='api_cancel_appointment_alias'),
     path('reschedule/<int:appointment_id>/', RescheduleAppointmentView.as_view(), name='api_reschedule_appointment'),
+    path('<int:appointment_id>/reschedule/', RescheduleAppointmentView.as_view(), name='api_reschedule_appointment_alias'),
     
     # Hospital Management endpoints
     path('hospital/stats/', HospitalDashboardStatsView.as_view(), name='hospital_dashboard_stats'),

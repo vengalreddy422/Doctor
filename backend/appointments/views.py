@@ -502,6 +502,21 @@ class RescheduleAppointmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # R1: One reschedule per appointment per calendar day (Asia/Kolkata)
+        import zoneinfo
+        import datetime
+        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        now_kolkata = timezone.now().astimezone(kolkata_tz)
+        if appointment.last_rescheduled_at:
+            last_kolkata = appointment.last_rescheduled_at.astimezone(kolkata_tz)
+            if last_kolkata.date() == now_kolkata.date():
+                tomorrow_date = now_kolkata.date() + datetime.timedelta(days=1)
+                allowed_at_str = f"{tomorrow_date} at 00:00 IST"
+                return Response(
+                    {"error": f"Only one reschedule per appointment per calendar day is permitted. You can reschedule this appointment again on {allowed_at_str}."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         new_slot_id = request.data.get('new_slot_id')
         if new_slot_id:
             with transaction.atomic():
@@ -515,7 +530,9 @@ class RescheduleAppointmentView(APIView):
 
                 appointment.slot = new_slot
                 appointment.status = 'confirmed'
-                appointment.save(update_fields=['slot', 'status', 'updated_at'])
+                appointment.reschedule_count = (appointment.reschedule_count or 0) + 1
+                appointment.last_rescheduled_at = timezone.now()
+                appointment.save(update_fields=['slot', 'status', 'reschedule_count', 'last_rescheduled_at', 'updated_at'])
 
                 # Invalidate doctor slots and dashboard caches
                 from django.core.cache import cache

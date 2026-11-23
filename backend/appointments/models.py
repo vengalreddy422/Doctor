@@ -75,6 +75,12 @@ class Appointment(models.Model):
         'self', null=True, blank=True,
         on_delete=models.SET_NULL, related_name='rescheduled_to',
     )
+    reschedule_count = models.PositiveIntegerField(
+        default=0, help_text='Total number of times this appointment has been rescheduled'
+    )
+    last_rescheduled_at = models.DateTimeField(
+        null=True, blank=True, help_text='Timestamp of the most recent reschedule'
+    )
 
     # Patient & Family Member Info
     patient_name = models.CharField(
