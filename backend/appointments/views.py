@@ -519,14 +519,34 @@ class RescheduleAppointmentView(APIView):
 
         new_slot_id = request.data.get('new_slot_id')
         if new_slot_id:
+            try:
+                target_slot_id_int = int(new_slot_id)
+            except (ValueError, TypeError):
+                return Response({"error": "Invalid target slot ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # R2: Rescheduling to the SAME slot is rejected
+            if target_slot_id_int == appointment.slot_id:
+                return Response(
+                    {"error": "Cannot reschedule to the same slot. Please select a different consultation slot."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             with transaction.atomic():
-                new_slot = get_object_or_404(Slot.objects.select_for_update().select_related('doctor'), id=new_slot_id)
+                new_slot = get_object_or_404(Slot.objects.select_for_update().select_related('doctor'), id=target_slot_id_int)
+                
+                # R3: Target slot validations
                 if new_slot.is_past():
                     return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)
                 if new_slot.is_blocked:
                     return Response({"error": "The selected slot is temporarily blocked by hospital administration. Please choose an active slot."}, status=status.HTTP_400_BAD_REQUEST)
                 if new_slot.booked_count() >= new_slot.max_capacity:
                     return Response({"error": f"The selected slot is completely booked ({new_slot.max_capacity} of {new_slot.max_capacity} appointments filled). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
+                if new_slot.doctor_id != appointment.doctor_id:
+                    return Response({"error": "Target slot must belong to the same doctor. Doctor change is not permitted during reschedule."}, status=status.HTTP_400_BAD_REQUEST)
+
+                # R7: Prevent duplicate appointment by same patient in target slot
+                if Appointment.objects.filter(patient=appointment.patient, slot=new_slot, status__in=['pending', 'confirmed']).exists():
+                    return Response({"error": "You already hold an active appointment in this slot. Duplicate bookings in the same slot are not permitted."}, status=status.HTTP_400_BAD_REQUEST)
 
                 appointment.slot = new_slot
                 appointment.status = 'confirmed'
