@@ -20,6 +20,7 @@ urlpatterns = [
     path('validate-coupon/', ValidateCouponView.as_view(), name='api_validate_coupon'),
     path('my-appointments/', MyAppointmentsView.as_view(), name='api_my_appointments'),
     path('cancel-preview/<int:appointment_id>/', CancellationPreviewView.as_view(), name='api_cancellation_preview'),
+    path('<int:appointment_id>/cancel-preview/', CancellationPreviewView.as_view(), name='api_cancellation_preview_alias'),
     path('cancel/<int:appointment_id>/', CancelAppointmentView.as_view(), name='api_cancel_appointment'),
     path('<int:appointment_id>/cancel/', CancelAppointmentView.as_view(), name='api_cancel_appointment_alias'),
     path('reschedule/<int:appointment_id>/', RescheduleAppointmentView.as_view(), name='api_reschedule_appointment'),
