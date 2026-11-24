@@ -110,7 +110,9 @@ def run_click_verification():
             # Check toolbar badge has real count (>0)
             badge_text = page.locator("#badge-ready-to-admit").inner_text()
             print(f"   [PASS] Toolbar dynamic pending badge: '{badge_text}'")
-            assert "0 Pending" not in badge_text, f"Badge should not be 0 Pending, got {badge_text}"
+            import re
+            pending_match = re.search(r'\((\d+)\s+Pending\)', badge_text)
+            assert pending_match and int(pending_match.group(1)) > 0, f"Badge should show positive pending count, got {badge_text}"
 
             # ------------------------------------------------------------------
             # 2. CLICK ACTION: ACCEPT PATIENT (CHECK-IN)
