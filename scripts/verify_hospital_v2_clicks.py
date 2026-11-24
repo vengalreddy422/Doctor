@@ -185,17 +185,18 @@ def run_click_verification():
             reschedule_btn = page.locator('button:has-text("Reschedule")').first
             reschedule_btn.click()
 
-            # Assert modal is open
+            # Assert modal is open and slots loaded
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
-            print("   [PASS] UI Assertion: Reschedule modal is displayed.")
+            page.wait_for_selector('.cc-modal-backdrop select option', timeout=10000)
+            print("   [PASS] UI Assertion: Reschedule modal is displayed with available slots.")
 
             # Pick target slot
-            slot_select = page.locator('select').last
+            slot_select = page.locator('.cc-modal-backdrop select').last
             options_count = slot_select.locator('option').count()
             if options_count > 1:
                 slot_select.select_option(index=1)
 
-            reason_input = page.locator('textarea, input[type="text"]').last
+            reason_input = page.locator('.cc-modal-backdrop input[type="text"]')
             if reason_input.is_visible():
                 reason_input.fill("Patient requested slot realignment.")
 
