@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import ScrollToTop from './components/ScrollToTop';
@@ -22,6 +22,10 @@ import AdminDoctorFormPage from './pages/AdminDoctorFormPage';
 import HospitalDashboardPage from './pages/HospitalDashboardPage';
 import HospitalQueuePage from './pages/hospital/HospitalQueuePage';
 import HospitalOverviewPage from './pages/hospital/HospitalOverviewPage';
+import HospitalDoctorsPage from './pages/hospital/HospitalDoctorsPage';
+import HospitalSlotsPage from './pages/hospital/HospitalSlotsPage';
+import HospitalEmergencyPage from './pages/hospital/HospitalEmergencyPage';
+import HospitalPaymentsPage from './pages/hospital/HospitalPaymentsPage';
 
 function App() {
   const location = useLocation();
@@ -80,6 +84,14 @@ function App() {
 
           {/* Hospital Management Routes */}
           <Route
+            path="/hospital"
+            element={<Navigate to="/hospital/queue" replace />}
+          />
+          <Route
+            path="/hospital/dashboard"
+            element={<Navigate to="/hospital/queue" replace />}
+          />
+          <Route
             path="/hospital/queue"
             element={
               <HospitalRoute>
@@ -96,15 +108,43 @@ function App() {
             }
           />
           <Route
-            path="/hospital/dashboard"
+            path="/hospital/doctors"
             element={
               <HospitalRoute>
-                <HospitalDashboardPage />
+                <HospitalDoctorsPage />
+              </HospitalRoute>
+            }
+          />
+          <Route
+            path="/hospital/slots"
+            element={
+              <HospitalRoute>
+                <HospitalSlotsPage />
+              </HospitalRoute>
+            }
+          />
+          <Route
+            path="/hospital/emergency"
+            element={
+              <HospitalRoute>
+                <HospitalEmergencyPage />
+              </HospitalRoute>
+            }
+          />
+          <Route
+            path="/hospital/payments"
+            element={
+              <HospitalRoute>
+                <HospitalPaymentsPage />
               </HospitalRoute>
             }
           />
 
           {/* Admin Routes */}
+          <Route
+            path="/admin"
+            element={<Navigate to="/admin/dashboard" replace />}
+          />
           <Route
             path="/admin/dashboard"
             element={
