@@ -126,34 +126,35 @@ def seed_600_plus():
 
     print("[2/3] Generating 7-day slot grid for all doctors...")
     today = timezone.localdate()
-    all_slots = []
     doctors = [doc_a1, doc_a2, doc_b]
 
-    # Slot times throughout the day
-    slot_times = [
-        (datetime.time(9, 0), datetime.time(9, 30)),
-        (datetime.time(9, 30), datetime.time(10, 0)),
-        (datetime.time(10, 0), datetime.time(10, 30)),
-        (datetime.time(10, 30), datetime.time(11, 0)),
-        (datetime.time(11, 0), datetime.time(11, 30)),
-        (datetime.time(11, 30), datetime.time(12, 0)),
-        (datetime.time(14, 0), datetime.time(14, 30)),
-        (datetime.time(14, 30), datetime.time(15, 0)),
-        (datetime.time(15, 0), datetime.time(15, 30)),
-        (datetime.time(15, 30), datetime.time(16, 0)),
-    ]
-
-    for d_offset in range(7):
-        target_date = today + datetime.timedelta(days=d_offset)
-        for doc in doctors:
-            for s_start, s_end in slot_times:
-                slot, _ = Slot.objects.get_or_create(
-                    doctor=doc,
-                    date=target_date,
-                    start_time=s_start,
-                    defaults={"end_time": s_end, "max_capacity": 5, "is_blocked": False}
-                )
-                all_slots.append(slot)
+    if Slot.objects.filter(doctor__in=doctors).count() >= 210:
+        all_slots = list(Slot.objects.filter(doctor__in=doctors))
+    else:
+        all_slots = []
+        slot_times = [
+            (datetime.time(9, 0), datetime.time(9, 30)),
+            (datetime.time(9, 30), datetime.time(10, 0)),
+            (datetime.time(10, 0), datetime.time(10, 30)),
+            (datetime.time(10, 30), datetime.time(11, 0)),
+            (datetime.time(11, 0), datetime.time(11, 30)),
+            (datetime.time(11, 30), datetime.time(12, 0)),
+            (datetime.time(14, 0), datetime.time(14, 30)),
+            (datetime.time(14, 30), datetime.time(15, 0)),
+            (datetime.time(15, 0), datetime.time(15, 30)),
+            (datetime.time(15, 30), datetime.time(16, 0)),
+        ]
+        for d_offset in range(7):
+            target_date = today + datetime.timedelta(days=d_offset)
+            for doc in doctors:
+                for s_start, s_end in slot_times:
+                    slot, _ = Slot.objects.get_or_create(
+                        doctor=doc,
+                        date=target_date,
+                        start_time=s_start,
+                        defaults={"end_time": s_end, "max_capacity": 5, "is_blocked": False}
+                    )
+                    all_slots.append(slot)
 
     slots_a = [s for s in all_slots if s.doctor in (doc_a1, doc_a2)]
     slots_b = [s for s in all_slots if s.doctor == doc_b]
@@ -254,13 +255,13 @@ def seed_600_plus():
         print(f"   -> Bulk inserted {len(created_appts)} appointments.")
 
     # Now create linked payments
-    new_appts = Appointment.objects.filter(payment__isnull=True)
+    new_appts = list(Appointment.objects.filter(payment__isnull=True).only('id', 'fee_charged', 'status'))
     created_payments = []
     for appt in new_appts:
         p_status = "paid" if appt.status in ("confirmed", "completed") else "refunded" if appt.status == "cancelled" else "created"
         pay = Payment(
-            appointment=appt,
-            patient=appt.patient,
+            appointment_id=appt.id,
+            patient_id=patient.id,
             amount=appt.fee_charged,
             status=p_status,
             razorpay_order_id=f"order_mock_{appt.id:06d}",
@@ -271,7 +272,7 @@ def seed_600_plus():
         created_payments.append(pay)
 
     if created_payments:
-        Payment.objects.bulk_create(created_payments, batch_size=200)
+        Payment.objects.bulk_create(created_payments, batch_size=300)
         print(f"   -> Bulk inserted {len(created_payments)} payments.")
 
     total_hosp_a = Appointment.objects.filter(doctor__hospital=hosp_a).count()
