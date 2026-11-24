@@ -524,11 +524,21 @@ class RescheduleAppointmentView(APIView):
 
     def post(self, request, appointment_id):
         is_admin = request.user.role == 'admin' or request.user.is_staff
+        is_hospital = request.user.role == 'hospital'
         appt_qs = (
             Appointment.objects
             .select_related('doctor', 'slot', 'patient')
         )
-        if not is_admin:
+        if is_hospital:
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            appt_qs = appt_qs.filter(
+                Q(doctor__hospital=user_hosp) | Q(doctor__hospital_name__iexact=user_hosp.name)
+            )
+        elif not is_admin:
             appt_qs = appt_qs.filter(patient=request.user)
         try:
             appointment = appt_qs.get(id=appointment_id)
@@ -536,7 +546,8 @@ class RescheduleAppointmentView(APIView):
             return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
 
         eligible, reason = appointment.check_reschedule_eligibility()
-        if not eligible and not (is_admin and "already checked in" not in reason):
+        staff_override = (is_admin or is_hospital) and "already checked in" not in reason
+        if not eligible and not staff_override:
             return Response(
                 {"error": reason},
                 status=status.HTTP_400_BAD_REQUEST
@@ -572,13 +583,21 @@ class RescheduleAppointmentView(APIView):
 
             # Re-check daily quota under lock
             eligible, reason = appointment.check_reschedule_eligibility()
-            if not eligible and not (is_admin and "already checked in" not in reason):
+            staff_override = (is_admin or is_hospital) and "already checked in" not in reason
+            if not eligible and not staff_override:
                 return Response({"error": reason}, status=status.HTTP_400_BAD_REQUEST)
 
             try:
                 new_slot = Slot.objects.select_for_update().select_related('doctor').get(id=target_slot_id)
             except Slot.DoesNotExist:
                 return Response({"error": "Target slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if is_hospital:
+                new_doc_hosp_id = new_slot.doctor.hospital_id if new_slot.doctor else None
+                new_doc_hosp_name = new_slot.doctor.hospital_name.strip().lower() if new_slot.doctor and new_slot.doctor.hospital_name else ''
+                matches = (new_doc_hosp_id == user_hosp.id) or (new_doc_hosp_name == user_hosp.name.strip().lower())
+                if not matches:
+                    return Response({"error": "Unauthorized: Target slot belongs to another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
             # R3: Target slot validations
             if new_slot.is_past():
@@ -599,8 +618,9 @@ class RescheduleAppointmentView(APIView):
             appointment.status = 'confirmed'
             appointment.reschedule_count = (appointment.reschedule_count or 0) + 1
             appointment.last_rescheduled_at = timezone.now()
-            if is_admin and appointment.patient != request.user:
-                appointment.notes = f"[Admin Rescheduled by {request.user.email}] {appointment.notes or ''}".strip()
+            if (is_admin or is_hospital) and appointment.patient != request.user:
+                role_label = 'Hospital' if is_hospital else 'Admin'
+                appointment.notes = f"[{role_label} Rescheduled by {request.user.email}] {appointment.notes or ''}".strip()
 
             appointment.save(update_fields=['slot', 'status', 'reschedule_count', 'last_rescheduled_at', 'notes', 'updated_at'])
 
