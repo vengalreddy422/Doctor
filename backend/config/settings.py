@@ -74,8 +74,8 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASE_URL = config('DATABASE_URL', default=None)
 
-# Use high-speed SQLite for unit testing to avoid remote cloud DB pooler restrictions
-TESTING = 'test' in sys.argv or 'pytest' in sys.modules or os.environ.get('DJANGO_TESTING') == 'True'
+# Use high-speed SQLite for unit testing unless USE_TEST_POSTGRES is enabled
+TESTING = ('test' in sys.argv or 'pytest' in sys.modules or os.environ.get('DJANGO_TESTING') == 'True') and not config('USE_TEST_POSTGRES', default=False, cast=bool) and os.environ.get('USE_TEST_POSTGRES') != 'True'
 
 if TESTING:
     DATABASES = {
