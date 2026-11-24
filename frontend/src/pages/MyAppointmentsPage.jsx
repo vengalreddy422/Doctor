@@ -29,6 +29,19 @@ const MyAppointmentsPage = () => {
     submitting: false,
   });
 
+  // Dedicated Patient Reschedule Modal State
+  const [rescheduleModal, setRescheduleModal] = useState({
+    open: false,
+    appointment: null,
+    availableDates: [],
+    selectedDate: '',
+    availableSlots: [],
+    selectedSlotId: '',
+    loadingSlots: false,
+    submitting: false,
+    error: '',
+  });
+
   // Post-Consultation 3-Category Rating & Review Modal State (Doctor, Hospital & Management)
   const [reviewModal, setReviewModal] = useState({
     open: false,
@@ -236,19 +249,87 @@ const MyAppointmentsPage = () => {
     }
   };
 
-  const handleReschedule = async (apptId, docId) => {
-    setActionLoading(apptId);
-    setAlertInfo({ type: '', message: '' });
+  const handleOpenRescheduleModal = async (appt) => {
+    const doctorId = appt.doctor?.id || appt.doctor;
+    setRescheduleModal({
+      open: true,
+      appointment: appt,
+      availableDates: [],
+      selectedDate: '',
+      availableSlots: [],
+      selectedSlotId: '',
+      loadingSlots: true,
+      submitting: false,
+      error: '',
+    });
     try {
-      await api.post(`/appointments/reschedule/${apptId}/`);
-      navigate(`/doctors/${docId}`, {
-        state: { alert: { type: 'info', message: 'Please select a new slot to complete your reschedule.' } }
-      });
+      const res = await api.get(`/doctors/${doctorId}/slots/`);
+      // Extract unique upcoming dates from slots
+      const slots = res.data || [];
+      const dates = Array.from(new Set(slots.map(s => s.date))).sort();
+      const initialDate = dates[0] || '';
+      const initialSlots = initialDate ? slots.filter(s => s.date === initialDate) : [];
+      setRescheduleModal(prev => ({
+        ...prev,
+        availableDates: dates,
+        selectedDate: initialDate,
+        availableSlots: initialSlots,
+        loadingSlots: false,
+      }));
     } catch (err) {
-      const msg = err.response?.data?.error || 'Failed to reschedule appointment.';
-      setAlertInfo({ type: 'error', message: msg });
-      setActionLoading(null);
+      setRescheduleModal(prev => ({
+        ...prev,
+        loadingSlots: false,
+        error: 'Failed to load doctor available dates.',
+      }));
     }
+  };
+
+  const handleRescheduleDateChange = async (date) => {
+    const doctorId = rescheduleModal.appointment?.doctor?.id || rescheduleModal.appointment?.doctor;
+    setRescheduleModal(prev => ({ ...prev, selectedDate: date, selectedSlotId: '', loadingSlots: true, error: '' }));
+    try {
+      const res = await api.get(`/doctors/${doctorId}/slots/?date=${date}`);
+      setRescheduleModal(prev => ({
+        ...prev,
+        availableSlots: res.data || [],
+        loadingSlots: false,
+      }));
+    } catch (err) {
+      setRescheduleModal(prev => ({
+        ...prev,
+        loadingSlots: false,
+        error: 'Failed to load doctor time slots.',
+      }));
+    }
+  };
+
+  const handleConfirmReschedule = async (e) => {
+    if (e) e.preventDefault();
+    if (!rescheduleModal.selectedSlotId || !rescheduleModal.appointment) return;
+    setRescheduleModal(prev => ({ ...prev, submitting: true, error: '' }));
+    try {
+      const res = await api.post(`/appointments/reschedule/${rescheduleModal.appointment.id}/`, {
+        new_slot_id: parseInt(rescheduleModal.selectedSlotId, 10),
+      });
+      setAlertInfo({
+        type: 'success',
+        message: res.data?.message || 'Appointment successfully rescheduled.'
+      });
+      setRescheduleModal(prev => ({ ...prev, open: false, submitting: false }));
+      fetchAppointments();
+    } catch (err) {
+      const errMsg = err.response?.data?.error || 'Failed to reschedule appointment.';
+      setRescheduleModal(prev => ({
+        ...prev,
+        submitting: false,
+        error: errMsg,
+      }));
+    }
+  };
+
+  const handleCloseRescheduleModal = () => {
+    setRescheduleModal(prev => ({ ...prev, open: false, submitting: false, error: '' }));
   };
 
   // Razorpay Checkout Trigger
@@ -571,20 +652,21 @@ const MyAppointmentsPage = () => {
                     )
                   )}
 
-                  {/* Rescheduling with 10-Hour Rule Validation */}
+                  {/* Rescheduling with 10-Hour Rule & Daily Quota Validation */}
                   {(appt.status === 'pending' || appt.status === 'confirmed') && (
                     appt.reschedule_info?.eligible ? (
                       <button
-                        className="btn btn-sm btn-outline"
-                        onClick={() => handleReschedule(appt.id, appt.doctor)}
+                        className="btn btn-sm btn-outline btn-reschedule"
+                        onClick={() => handleOpenRescheduleModal(appt)}
                         disabled={actionLoading === appt.id}
                         title="Reschedule to a new slot (Available > 10 hours prior to consultation)"
+                        data-testid={`reschedule-btn-${appt.id}`}
                       >
                         🔄 Reschedule
                       </button>
                     ) : (
                       <button
-                        className="btn btn-sm btn-outline"
+                        className="btn btn-sm btn-outline btn-reschedule-locked"
                         disabled
                         style={{
                           opacity: 0.6,
@@ -596,9 +678,10 @@ const MyAppointmentsPage = () => {
                           alignItems: 'center',
                           gap: '3px'
                         }}
-                        title="Rescheduling is only permitted up to 10 hours before appointment start time to prevent empty slot vacancy."
+                        title={appt.reschedule_info?.reason || "Rescheduling locked"}
+                        data-testid={`reschedule-locked-btn-${appt.id}`}
                       >
-                        <Lock size={11} /> Reschedule Locked (&lt; 10h)
+                        <Lock size={11} /> {appt.reschedule_info?.reason?.toLowerCase().includes('calendar day') ? 'Rescheduled Today' : 'Reschedule Locked (< 10h)'}
                       </button>
                     )
                   )}
@@ -618,10 +701,11 @@ const MyAppointmentsPage = () => {
 
                   {appt.is_cancellable && (
                     <button
-                      className="btn btn-sm btn-outline"
+                      className="btn btn-sm btn-outline btn-cancel"
                       onClick={() => handleOpenCancelModal(appt)}
                       style={{ color: 'var(--color-danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }}
                       disabled={actionLoading === appt.id}
+                      data-testid={`cancel-btn-${appt.id}`}
                     >
                       Cancel & Refund
                     </button>
@@ -892,6 +976,7 @@ const MyAppointmentsPage = () => {
                       onClick={handleConfirmCancellation}
                       disabled={cancellationModal.submitting}
                       className="btn btn-primary"
+                      data-testid="confirm-cancel-btn"
                       style={{ background: '#dc2626', borderColor: '#dc2626', display: 'flex', alignItems: 'center', gap: '6px' }}
                     >
                       {cancellationModal.submitting ? 'Processing Refund...' : `Confirm & Refund ₹${cancellationModal.preview?.refund_amount}`}
@@ -899,6 +984,155 @@ const MyAppointmentsPage = () => {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* PATIENT APPOINTMENT RESCHEDULE MODAL */}
+      {/* ========================================================================= */}
+      {rescheduleModal.open && rescheduleModal.appointment && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200, padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: '560px', maxHeight: '92vh', overflowY: 'auto', background: '#ffffff', borderRadius: '16px', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', border: 'none', padding: 0 }}>
+            {/* Header */}
+            <div style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#fff', padding: '1.25rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTopLeftRadius: '16px', borderTopRightRadius: '16px' }}>
+              <div>
+                <div style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#38bdf8' }}>
+                  Reschedule Appointment
+                </div>
+                <h3 style={{ margin: '2px 0 0', fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>
+                  Select New Slot - Dr. {rescheduleModal.appointment?.doctor_name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseRescheduleModal}
+                style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%', width: '32px', height: '32px', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              {/* Current Slot Info */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '0.75rem 1rem', marginBottom: '1.25rem', fontSize: '0.82rem' }}>
+                <div style={{ fontWeight: 700, color: 'var(--color-navy)', marginBottom: '4px' }}>
+                  Current Appointment:
+                </div>
+                <div style={{ color: '#475569' }}>
+                  📅 <strong>{rescheduleModal.appointment?.slot_date}</strong> at 🕒 <strong>{rescheduleModal.appointment?.slot_time}</strong>
+                </div>
+                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '2px' }}>
+                  Doctor: Dr. {rescheduleModal.appointment?.doctor_name} • Receipt: #{rescheduleModal.appointment?.receipt_id}
+                </div>
+              </div>
+
+              {rescheduleModal.error && (
+                <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#dc2626', fontSize: '0.84rem', fontWeight: 600, marginBottom: '1rem' }} data-testid="reschedule-error-msg">
+                  ⚠️ {rescheduleModal.error}
+                </div>
+              )}
+
+              <form onSubmit={handleConfirmReschedule} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {/* Step 1: Select Date */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '4px' }}>
+                    1. Choose Consultation Date:
+                  </label>
+                  {rescheduleModal.availableDates.length > 0 ? (
+                    <select
+                      value={rescheduleModal.selectedDate}
+                      onChange={(e) => handleRescheduleDateChange(e.target.value)}
+                      data-testid="reschedule-date-select"
+                      style={{ width: '100%', height: '40px', borderRadius: '8px', border: '1px solid var(--c-border)', padding: '0 10px', fontSize: '0.88rem', background: '#fff' }}
+                    >
+                      {rescheduleModal.availableDates.map((d) => (
+                        <option key={d} value={d}>📅 {d}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ padding: '0.65rem', background: '#f8fafc', color: '#64748b', borderRadius: '8px', fontSize: '0.82rem' }}>
+                      {rescheduleModal.loadingSlots ? 'Scanning doctor calendar...' : 'No upcoming dates available for this doctor.'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 2: Target Slot Picker */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '4px' }}>
+                    2. Choose Target Time Slot:
+                  </label>
+                  {rescheduleModal.availableSlots.length > 0 ? (
+                    <select
+                      value={rescheduleModal.selectedSlotId}
+                      onChange={(e) => setRescheduleModal({ ...rescheduleModal, selectedSlotId: e.target.value, error: '' })}
+                      data-testid="reschedule-slot-select"
+                      style={{ width: '100%', height: '40px', borderRadius: '8px', border: '1px solid var(--c-border)', padding: '0 10px', fontSize: '0.88rem', background: '#fff' }}
+                    >
+                      <option value="">-- Select a time slot --</option>
+                      {rescheduleModal.availableSlots.map((s) => {
+                        const isCurrentSlot = s.id === rescheduleModal.appointment?.slot;
+                        const booked = s.booked_count ?? s.booked ?? 0;
+                        const maxCap = s.max_capacity || 5;
+                        const isFull = s.is_full || booked >= maxCap;
+                        const isPast = s.is_past;
+                        const isBlocked = s.is_blocked;
+                        const isDisabled = isCurrentSlot || isFull || isPast || isBlocked;
+
+                        let labelSuffix = `(${booked}/${maxCap} Booked)`;
+                        if (isCurrentSlot) labelSuffix = `(Current Slot - Not selectable)`;
+                        else if (isFull) labelSuffix = `(🔴 5/5 full - Unselectable)`;
+                        else if (isBlocked) labelSuffix = `(🔒 Blocked)`;
+                        else if (isPast) labelSuffix = `(⏰ Passed)`;
+
+                        return (
+                          <option
+                            key={s.id}
+                            value={s.id}
+                            disabled={isDisabled}
+                            data-is-current={isCurrentSlot ? 'true' : 'false'}
+                            data-is-full={isFull ? 'true' : 'false'}
+                            style={isCurrentSlot || isFull || isPast || isBlocked ? { color: '#94a3b8', background: '#f1f5f9' } : {}}
+                          >
+                            🕒 {s.start_time || s.time} {s.end_time ? `- ${s.end_time}` : ''} {labelSuffix}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <div style={{ padding: '0.65rem', background: '#fffbeb', color: '#92400e', borderRadius: '8px', fontSize: '0.82rem' }}>
+                      {rescheduleModal.loadingSlots ? 'Loading slots...' : 'No slots available for the selected date.'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Policy Notice */}
+                <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '0.65rem 0.85rem', fontSize: '0.78rem', color: '#0369a1' }}>
+                  ℹ️ <strong>Reschedule Policy:</strong> 1 reschedule per appointment per calendar day. Rescheduling is permitted up to 10 hours prior to consultation start time. Your original payment and receipt are retained.
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', borderTop: '1px solid #e2e8f0', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={handleCloseRescheduleModal}
+                    className="btn btn-outline"
+                    disabled={rescheduleModal.submitting}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!rescheduleModal.selectedSlotId || rescheduleModal.submitting}
+                    className="btn btn-primary"
+                    data-testid="confirm-reschedule-btn"
+                    style={{ background: '#0284c7', borderColor: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    {rescheduleModal.submitting ? 'Rescheduling...' : 'Confirm Reschedule'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
