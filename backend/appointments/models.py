@@ -75,11 +75,13 @@ class Appointment(models.Model):
         'self', null=True, blank=True,
         on_delete=models.SET_NULL, related_name='rescheduled_to',
     )
-    reschedule_count = models.PositiveIntegerField(
-        default=0, help_text='Total number of times this appointment has been rescheduled'
-    )
     last_rescheduled_at = models.DateTimeField(
-        null=True, blank=True, help_text='Timestamp of the most recent reschedule'
+        null=True, blank=True,
+        help_text='Timestamp of the most recent reschedule'
+    )
+    reschedule_count = models.PositiveIntegerField(
+        default=0,
+        help_text='Total number of times this appointment has been rescheduled'
     )
 
     # Patient & Family Member Info
@@ -210,12 +212,21 @@ class Appointment(models.Model):
 
     def check_reschedule_eligibility(self):
         """
-        10-Hour Reschedule Business Rule:
-        Rescheduling is permitted only if >= 10 hours remain before slot time.
-        If < 10 hours, slot cannot be rescheduled to prevent empty slot vacancy.
+        10-Hour Reschedule Business Rule & Frequency Constraints:
+        - Only confirmed / pending allowed
+        - Cannot reschedule if patient already checked in at OP or in consultation
+        - Rescheduling is permitted only if >= 10 hours remain before slot time.
+        - One reschedule per appointment per calendar day (Asia/Kolkata).
         """
+        import datetime
+        import zoneinfo
+        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+
         if self.status not in ('pending', 'confirmed'):
             return False, f"Cannot reschedule an appointment with status '{self.get_status_display()}'."
+
+        if self.op_checked_in or self.status == 'in_consultation':
+            return False, "Cannot reschedule an appointment where patient has already checked in at OP."
 
         if self.slot.is_past():
             return False, "Cannot reschedule a past consultation."
@@ -225,7 +236,15 @@ class Appointment(models.Model):
             hrs_display = max(0, round(hours_rem, 1))
             return False, f"Rescheduling is only permitted up to 10 hours prior to consultation start time (currently {hrs_display} hrs remaining). Empty slot vacancy protection applies."
 
-        return True, "Eligible for rescheduling (10+ hours before slot)."
+        if self.last_rescheduled_at:
+            now_kolkata = timezone.now().astimezone(kolkata_tz)
+            last_kolkata = self.last_rescheduled_at.astimezone(kolkata_tz)
+            if now_kolkata.date() == last_kolkata.date():
+                tomorrow_date = now_kolkata.date() + datetime.timedelta(days=1)
+                allowed_at_str = f"{tomorrow_date} at 00:00 IST"
+                return False, f"Only one reschedule per appointment per calendar day is permitted. You can reschedule this appointment again after midnight (00:00 IST) on {allowed_at_str}."
+
+        return True, "Eligible for rescheduling (10+ hours before slot, daily quota available)."
 
     def calculate_cancellation_refund(self):
         """
@@ -292,6 +311,8 @@ class Appointment(models.Model):
 
     @property
     def is_cancellable(self):
+        if self.op_checked_in or self.status in ('completed', 'cancelled', 'expired', 'in_consultation'):
+            return False
         return self.status in ('pending', 'confirmed')
 
     @property
