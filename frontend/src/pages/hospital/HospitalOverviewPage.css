@@ -1,0 +1,250 @@
+/* CareConnect Hospital Overview & Analytics Page Styles */
+.cc-overview-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* 4-Column KPI Metric Cards */
+.cc-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.cc-kpi-card {
+  background: #ffffff;
+  border: 1px solid var(--cc-slate-200);
+  border-radius: var(--cc-radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--cc-shadow-xs);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.75rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cc-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--cc-shadow-md);
+}
+
+.cc-kpi-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cc-kpi-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--cc-slate-500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cc-kpi-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--cc-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cc-kpi-icon-wrap.navy {
+  background-color: var(--cc-primary-50);
+  color: var(--cc-primary);
+}
+
+.cc-kpi-icon-wrap.teal {
+  background-color: var(--cc-teal-50);
+  color: var(--cc-teal);
+}
+
+.cc-kpi-icon-wrap.amber {
+  background-color: #fffbeb;
+  color: #d97706;
+}
+
+.cc-kpi-icon-wrap.emerald {
+  background-color: #ecfdf5;
+  color: #059669;
+}
+
+.cc-kpi-value {
+  font-size: 1.875rem;
+  font-weight: 800;
+  color: var(--cc-slate-900);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.cc-kpi-footer {
+  font-size: 0.75rem;
+  color: var(--cc-slate-500);
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Two-column Content Section */
+.cc-overview-panels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 1.25rem;
+}
+
+.cc-panel-card {
+  background: #ffffff;
+  border: 1px solid var(--cc-slate-200);
+  border-radius: var(--cc-radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--cc-shadow-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.cc-panel-title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--cc-slate-100);
+  padding-bottom: 0.75rem;
+}
+
+.cc-panel-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cc-slate-900);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* Hourly Arrivals Bar Visualization */
+.cc-hourly-chart-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.625rem;
+  height: 180px;
+  padding-top: 1.5rem;
+  border-bottom: 1px solid var(--cc-slate-200);
+  overflow-x: auto;
+}
+
+.cc-hourly-bar-col {
+  flex: 1;
+  min-width: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.cc-bar-fill {
+  width: 100%;
+  max-width: 36px;
+  background: linear-gradient(180deg, var(--cc-teal) 0%, var(--cc-primary) 100%);
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
+  position: relative;
+}
+
+.cc-bar-count-label {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--cc-slate-700);
+}
+
+.cc-bar-hour-label {
+  font-size: 0.6875rem;
+  color: var(--cc-slate-500);
+  white-space: nowrap;
+}
+
+/* Doctor Capacity Bars */
+.cc-doc-occupancy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.cc-doc-occupancy-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.cc-doc-occupancy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+}
+
+.cc-progress-track {
+  width: 100%;
+  height: 8px;
+  background-color: var(--cc-slate-100);
+  border-radius: var(--cc-radius-full);
+  overflow: hidden;
+}
+
+.cc-progress-bar {
+  height: 100%;
+  border-radius: var(--cc-radius-full);
+  transition: width 0.3s ease;
+}
+
+.cc-progress-bar.green {
+  background-color: #10b981;
+}
+
+.cc-progress-bar.amber {
+  background-color: #f59e0b;
+}
+
+.cc-progress-bar.red {
+  background-color: #ef4444;
+}
+
+/* Patient Satisfaction Score Widget */
+.cc-ratings-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.cc-rating-tile {
+  background: var(--cc-slate-50);
+  border: 1px solid var(--cc-slate-200);
+  border-radius: var(--cc-radius-md);
+  padding: 0.875rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.cc-rating-num {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--cc-slate-900);
+}
+
+.cc-rating-label {
+  font-size: 0.75rem;
+  color: var(--cc-slate-500);
+  font-weight: 500;
+}

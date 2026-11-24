@@ -21,6 +21,7 @@ import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminDoctorFormPage from './pages/AdminDoctorFormPage';
 import HospitalDashboardPage from './pages/HospitalDashboardPage';
 import HospitalQueuePage from './pages/hospital/HospitalQueuePage';
+import HospitalOverviewPage from './pages/hospital/HospitalOverviewPage';
 
 function App() {
   const location = useLocation();
@@ -83,6 +84,14 @@ function App() {
             element={
               <HospitalRoute>
                 <HospitalQueuePage />
+              </HospitalRoute>
+            }
+          />
+          <Route
+            path="/hospital/overview"
+            element={
+              <HospitalRoute>
+                <HospitalOverviewPage />
               </HospitalRoute>
             }
           />
