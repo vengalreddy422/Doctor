@@ -13,6 +13,7 @@ from decimal import Decimal
 
 # Ensure test DB environment
 os.environ["ENV_FILE"] = ".env.test"
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 
 import django
 sys.path.insert(0, os.path.abspath("backend"))
@@ -95,9 +96,10 @@ def run_click_verification():
             page.fill('#id_password', "Password123!")
             page.click('button[type="submit"]')
 
-            # Wait for redirect to /hospital/queue
+            # Wait for redirect to /hospital/queue and data to finish loading
             page.wait_for_url("**/hospital/queue**", timeout=15000)
-            page.wait_for_selector(".cc-table", timeout=15000)
+            page.wait_for_selector(".cc-table tbody tr:not(:has-text('Loading'))", timeout=15000)
+            page.wait_for_function('!document.querySelector("#badge-ready-to-admit")?.innerText.includes("0 Pending")', timeout=15000)
             print("   [PASS] Logged in successfully. Current URL:", page.url)
 
             # Check toolbar badge has real count (>0)
@@ -119,7 +121,7 @@ def run_click_verification():
             assert candidate_checkin is not None, "Need a confirmed waiting appointment for check-in test"
 
             # Search specifically for candidate to isolate the row
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
+            search_input = page.locator('input[placeholder*="Search patient"]')
             search_input.fill(candidate_checkin.patient_name)
             page.wait_for_timeout(600)  # debounce
             page.wait_for_selector(".cc-table tbody tr", timeout=10000)
@@ -370,7 +372,7 @@ def run_click_verification():
             # 10. SEARCH, FILTER PERSISTENCE, & BROWSER RELOAD
             # ------------------------------------------------------------------
             print("\n[Step 10] Testing Search, Doctor Filter, and URL Query String Persistence on Reload...")
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
+            search_input = page.locator('input[placeholder*="Search patient"]')
             search_input.fill("Aarav")
             page.wait_for_timeout(600)
 
@@ -402,7 +404,7 @@ def run_click_verification():
             # ------------------------------------------------------------------
             print("\n[Step 11] Testing Pagination Boundaries (0, 1, 10, 11, 532 rows) and Page Sizes...")
             # Boundary A: 0 rows (empty search query)
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
+            search_input = page.locator('input[placeholder*="Search patient"]')
             search_input.fill("NONEXISTENT_XYZ_STRING")
             page.wait_for_timeout(600)
             assert "No patient appointments found matching the current search criteria" in page.content()
