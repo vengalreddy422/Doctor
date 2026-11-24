@@ -174,7 +174,7 @@ export default function HospitalQueuePage() {
         toast.error('Doctor information missing for appointment.');
         return;
       }
-      const res = await api.get(`/doctors/${docId}/`);
+      const res = await api.get(`/appointments/hospital/slots/?doctor_id=${docId}`);
       const slots = res.data.slots || [];
       const openSlots = slots.filter((s) => !s.is_blocked && (s.booked_count || 0) < (s.max_capacity || 5));
       const dates = Array.from(new Set(openSlots.map((s) => s.date))).sort();
@@ -199,7 +199,7 @@ export default function HospitalQueuePage() {
   const handleRescheduleDateChange = async (date) => {
     try {
       const docId = rescheduleModal.appointment.doctor_id || rescheduleModal.appointment.doctor?.id;
-      const res = await api.get(`/doctors/${docId}/`);
+      const res = await api.get(`/appointments/hospital/slots/?doctor_id=${docId}`);
       const slots = res.data.slots || [];
       const slotsForDate = slots.filter((s) => s.date === date && !s.is_blocked && (s.booked_count || 0) < (s.max_capacity || 5));
       setRescheduleModal((prev) => ({

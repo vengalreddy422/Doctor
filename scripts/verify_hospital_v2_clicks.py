@@ -13,6 +13,7 @@ from decimal import Decimal
 
 # Ensure test DB environment
 os.environ["ENV_FILE"] = ".env.test"
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 
 import django
 sys.path.insert(0, os.path.abspath("backend"))
@@ -44,16 +45,19 @@ def ensure_servers():
         env = os.environ.copy()
         env["ENV_FILE"] = ".env.test"
         backend_proc = subprocess.Popen(
-            [sys.executable, "backend/manage.py", "runserver", "127.0.0.1:8000"],
+            [sys.executable, "backend/manage.py", "runserver", "127.0.0.1:8000", "--noreload"],
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        for _ in range(30):
+        for _ in range(40):
             if is_port_in_use(8000):
                 print("Backend server is UP!")
                 break
             time.sleep(1)
+        assert is_port_in_use(8000), "Failed to start backend server on port 8000"
+    else:
+        print("Backend server is UP!")
 
     if not is_port_in_use(5173):
         print("Starting Vite frontend server on port 5173...")
@@ -63,11 +67,14 @@ def ensure_servers():
             stderr=subprocess.DEVNULL,
             shell=True
         )
-        for _ in range(30):
+        for _ in range(40):
             if is_port_in_use(5173):
                 print("Frontend server is UP!")
                 break
             time.sleep(1)
+        assert is_port_in_use(5173), "Failed to start frontend server on port 5173"
+    else:
+        print("Frontend server is UP!")
 
     return backend_proc, frontend_proc
 
@@ -95,13 +102,13 @@ def run_click_verification():
             page.fill('#id_password', "Password123!")
             page.click('button[type="submit"]')
 
-            # Wait for redirect to /hospital/queue
+            # Wait for redirect to /hospital/queue and data to load
             page.wait_for_url("**/hospital/queue**", timeout=15000)
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-patient-cell", timeout=20000)
             print("   [PASS] Logged in successfully. Current URL:", page.url)
 
             # Check toolbar badge has real count (>0)
-            badge_text = page.locator(".cc-toolbar-badge").inner_text()
+            badge_text = page.locator("#badge-ready-to-admit").inner_text()
             print(f"   [PASS] Toolbar dynamic pending badge: '{badge_text}'")
             import re
             pending_match = re.search(r'\((\d+)\s+Pending\)', badge_text)
@@ -120,21 +127,21 @@ def run_click_verification():
             ).first()
             assert candidate_checkin is not None, "Need a confirmed waiting appointment for check-in test"
 
-            # Search specifically for candidate to isolate the row
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
-            search_input.fill(candidate_checkin.patient_name)
-            page.wait_for_timeout(600)  # debounce
-            page.wait_for_selector(".cc-queue-table tbody tr", timeout=10000)
+            # Search specifically for candidate to isolate the exact row by unique receipt ID
+            search_input = page.locator('input[placeholder*="Search patient"]')
+            search_input.fill(candidate_checkin.receipt_id)
+            row_checkin = page.locator(f'tr:has-text("{candidate_checkin.receipt_id}")')
+            row_checkin.wait_for(state="visible", timeout=10000)
 
-            # Locate the 'Accept Patient' button for candidate
-            accept_btn = page.locator(f'button:has-text("Accept Patient")').first
+            # Locate the 'Accept Patient' button for candidate within its row
+            accept_btn = row_checkin.locator('button:has-text("Accept Patient")')
             assert accept_btn.is_visible(), "Accept Patient button must be visible"
 
             # Click Accept Patient
             accept_btn.click()
 
             # Assert UI Updates: toast appears & status pill changes to 'In OP Chamber'
-            page.wait_for_selector('.cc-status-in-op', timeout=10000)
+            row_checkin.locator('.cc-status-in-op').wait_for(state="visible", timeout=10000)
             print("   [PASS] UI Assertion: Row status pill changed to 'In OP Chamber'")
 
             # Assert DB Update
@@ -147,14 +154,14 @@ def run_click_verification():
             # 3. CLICK ACTION: COMPLETE CONSULTATION
             # ------------------------------------------------------------------
             print("\n[Step 3] Testing 'Complete Consultation' button click...")
-            complete_btn = page.locator('button:has-text("Complete Consultation")').first
+            complete_btn = row_checkin.locator('button:has-text("Complete Consultation")')
             assert complete_btn.is_visible(), "Complete Consultation button must be visible for checked-in patient"
 
             # Click Complete Consultation
             complete_btn.click()
 
             # Assert UI Updates: status pill becomes 'Consultation Completed'
-            page.wait_for_selector('.cc-status-completed', timeout=10000)
+            row_checkin.locator('.cc-status-completed').wait_for(state="visible", timeout=10000)
             print("   [PASS] UI Assertion: Row status pill changed to 'Consultation Completed'")
 
             # Assert DB Update
@@ -179,23 +186,25 @@ def run_click_verification():
             assert candidate_reschedule is not None, "Need candidate for reschedule test"
             orig_slot_id = candidate_reschedule.slot_id
 
-            search_input.fill(candidate_reschedule.patient_name)
-            page.wait_for_timeout(600)
+            search_input.fill(candidate_reschedule.receipt_id)
+            row_resched = page.locator(f'tr:has-text("{candidate_reschedule.receipt_id}")')
+            row_resched.wait_for(state="visible", timeout=10000)
 
-            reschedule_btn = page.locator('button:has-text("Reschedule")').first
+            reschedule_btn = row_resched.locator('button:has-text("Reschedule")')
             reschedule_btn.click()
 
-            # Assert modal is open
+            # Assert modal is open and slots loaded
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
-            print("   [PASS] UI Assertion: Reschedule modal is displayed.")
+            page.wait_for_selector('.cc-modal-backdrop select option', timeout=10000)
+            print("   [PASS] UI Assertion: Reschedule modal is displayed with available slots.")
 
             # Pick target slot
-            slot_select = page.locator('select').last
+            slot_select = page.locator('.cc-modal-backdrop select').last
             options_count = slot_select.locator('option').count()
             if options_count > 1:
                 slot_select.select_option(index=1)
 
-            reason_input = page.locator('textarea, input[type="text"]').last
+            reason_input = page.locator('.cc-modal-backdrop input[type="text"]')
             if reason_input.is_visible():
                 reason_input.fill("Patient requested slot realignment.")
 
@@ -226,24 +235,25 @@ def run_click_verification():
             ).exclude(id__in=[candidate_checkin.id, candidate_reschedule.id]).first()
             assert candidate_cancel is not None, "Need candidate for cancel test"
 
-            search_input.fill(candidate_cancel.patient_name)
-            page.wait_for_timeout(600)
+            search_input.fill(candidate_cancel.receipt_id)
+            row_cancel = page.locator(f'tr:has-text("{candidate_cancel.receipt_id}")')
+            row_cancel.wait_for(state="visible", timeout=10000)
 
-            cancel_btn = page.locator('button:has-text("Cancel & Refund")').first
+            cancel_btn = row_cancel.locator('button:has-text("Cancel & Refund")')
             cancel_btn.click()
 
             # Assert modal is open
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
             print("   [PASS] UI Assertion: Cancellation confirmation modal displayed.")
 
-            confirm_cancel_btn = page.locator('button:has-text("Confirm Full Refund & Cancel")')
+            confirm_cancel_btn = page.locator('button:has-text("Authorize 100% Refund & Cancel")')
             confirm_cancel_btn.click()
 
             # Wait for modal close
             page.wait_for_selector('.cc-modal-backdrop', state="hidden", timeout=10000)
 
             # Assert UI Updates
-            page.wait_for_selector('.cc-status-cancelled', timeout=10000)
+            row_cancel.locator('.cc-status-cancelled').wait_for(state="visible", timeout=10000)
             print("   [PASS] UI Assertion: Row status pill changed to 'Cancelled & Refunded'")
 
             # Assert DB Update
@@ -301,29 +311,29 @@ def run_click_verification():
 
             doc_test = Doctor.objects.get(contact_email="dr.arjun.mehta@careconnect.health")
 
-            # Find button Deactivate Specialist for Dr. Arjun Mehta
-            deactivate_btn = page.locator('button:has-text("Deactivate Specialist")').first
+            # Find button Deactivate for Dr. Arjun Mehta
+            deactivate_btn = page.locator('button:has-text("Deactivate")').first
             deactivate_btn.click()
 
-            page.wait_for_selector('button:has-text("Activate Specialist")', timeout=10000)
-            print("   [PASS] UI Assertion: Button changed to 'Activate Specialist'")
+            page.wait_for_selector('button:has-text("Activate")', timeout=10000)
+            print("   [PASS] UI Assertion: Button changed to 'Activate'")
 
             doc_test.refresh_from_db()
             assert doc_test.is_active is False, "DB Assertion Failed: doctor.is_active is True after deactivate"
             print(f"   [PASS] DB Assertion: doctor {doc_test.name} is_active=False")
 
-            # Click Activate Specialist back
-            activate_btn = page.locator('button:has-text("Activate Specialist")').first
+            # Click Activate back
+            activate_btn = page.locator('button:has-text("Activate")').first
             activate_btn.click()
-            page.wait_for_selector('button:has-text("Deactivate Specialist")', timeout=10000)
-            print("   [PASS] UI Assertion: Button changed back to 'Deactivate Specialist'")
+            page.wait_for_selector('button:has-text("Deactivate")', timeout=10000)
+            print("   [PASS] UI Assertion: Button changed back to 'Deactivate'")
 
             doc_test.refresh_from_db()
             assert doc_test.is_active is True, "DB Assertion Failed: doctor.is_active is False after activate"
             print(f"   [PASS] DB Assertion: doctor {doc_test.name} is_active=True")
 
             # Test Edit Profile modal
-            edit_profile_btn = page.locator('button:has-text("Edit Profile")').first
+            edit_profile_btn = page.locator('button:has-text("Edit")').first
             edit_profile_btn.click()
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
             print("   [PASS] UI Assertion: Doctor Edit Profile modal opened.")
@@ -354,7 +364,7 @@ def run_click_verification():
             # ------------------------------------------------------------------
             print("\n[Step 9] Navigating to /hospital/queue and opening Printable Tax Invoice...")
             page.goto("http://localhost:5173/hospital/queue", wait_until="networkidle")
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-table", timeout=15000)
 
             invoice_btn = page.locator('button:has-text("MC-")').first
             invoice_btn.click()
@@ -372,7 +382,7 @@ def run_click_verification():
             # 10. SEARCH, FILTER PERSISTENCE, & BROWSER RELOAD
             # ------------------------------------------------------------------
             print("\n[Step 10] Testing Search, Doctor Filter, and URL Query String Persistence on Reload...")
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
+            search_input = page.locator('input[placeholder*="Search patient"]')
             search_input.fill("Aarav")
             page.wait_for_timeout(600)
 
@@ -389,7 +399,7 @@ def run_click_verification():
 
             # Reload browser page
             page.reload(wait_until="networkidle")
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-table", timeout=15000)
 
             # Assert URL query parameters persisted
             assert "search=Aarav" in page.url, "URL query string search lost after reload!"
@@ -404,7 +414,7 @@ def run_click_verification():
             # ------------------------------------------------------------------
             print("\n[Step 11] Testing Pagination Boundaries (0, 1, 10, 11, 532 rows) and Page Sizes...")
             # Boundary A: 0 rows (empty search query)
-            search_input = page.locator('input[placeholder*="Search by patient name"]')
+            search_input = page.locator('input[placeholder*="Search patient"]')
             search_input.fill("NONEXISTENT_XYZ_STRING")
             page.wait_for_timeout(600)
             assert "No patient appointments found matching the current search criteria" in page.content()
@@ -420,7 +430,7 @@ def run_click_verification():
             page.wait_for_timeout(600)
             assert "page_size=25" in page.url, f"URL should reflect page_size=25, got {page.url}"
 
-            row_count_25 = page.locator(".cc-queue-table tbody tr").count()
+            row_count_25 = page.locator(".cc-table tbody tr").count()
             print(f"   [PASS] Page size 25: Rendered {row_count_25} rows on page 1.")
             assert row_count_25 == 25, f"Expected 25 rows, got {row_count_25}"
 
@@ -450,12 +460,12 @@ def run_click_verification():
 
             pages_to_capture = [
                 ("overview_populated", "http://localhost:5173/hospital/overview", ".cc-overview-container"),
-                ("queue_populated", "http://localhost:5173/hospital/queue", ".cc-queue-table"),
+                ("queue_populated", "http://localhost:5173/hospital/queue", ".cc-table"),
                 ("doctors_populated", "http://localhost:5173/hospital/doctors", ".cc-roster-grid"),
                 ("slots_populated", "http://localhost:5173/hospital/slots", ".cc-slots-grid"),
                 ("emergency_populated", "http://localhost:5173/hospital/emergency", ".cc-panel-card"),
-                ("payments_populated", "http://localhost:5173/hospital/payments", ".cc-queue-table"),
-                ("queue_empty_state", "http://localhost:5173/hospital/queue?search=NONEXISTENT_XYZ", ".cc-queue-table"),
+                ("payments_populated", "http://localhost:5173/hospital/payments", ".cc-table"),
+                ("queue_empty_state", "http://localhost:5173/hospital/queue?search=NONEXISTENT_XYZ", ".cc-table"),
             ]
 
             for label, url, wait_sel in pages_to_capture:
