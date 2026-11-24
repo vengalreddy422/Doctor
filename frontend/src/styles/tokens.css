@@ -1,0 +1,74 @@
+/* CareConnect Enterprise Design Tokens */
+:root {
+  /* Brand Primary - Deep Medical Navy */
+  --cc-primary: #0B3C5D;
+  --cc-primary-dark: #07263b;
+  --cc-primary-light: #16537e;
+  --cc-primary-50: #f0f6fa;
+  --cc-primary-100: #dbe8f3;
+  --cc-primary-200: #bcd5e7;
+
+  /* Accent - Clinical Teal */
+  --cc-teal: #0D9488;
+  --cc-teal-dark: #0f766e;
+  --cc-teal-light: #14b8a6;
+  --cc-teal-50: #f0fdfa;
+  --cc-teal-100: #ccfbf1;
+  --cc-teal-200: #99f6e4;
+
+  /* Neutrals - Slate */
+  --cc-slate-900: #0f172a;
+  --cc-slate-800: #1e293b;
+  --cc-slate-700: #334155;
+  --cc-slate-600: #475569;
+  --cc-slate-500: #64748b;
+  --cc-slate-400: #94a3b8;
+  --cc-slate-300: #cbd5e1;
+  --cc-slate-200: #e2e8f0;
+  --cc-slate-100: #f1f5f9;
+  --cc-slate-50: #f8fafc;
+  --cc-white: #ffffff;
+
+  /* Semantic Alerts */
+  --cc-success-bg: #ecfdf5;
+  --cc-success-text: #065f46;
+  --cc-success-border: #a7f3d0;
+  --cc-success-solid: #059669;
+
+  --cc-warning-bg: #fffbeb;
+  --cc-warning-text: #92400e;
+  --cc-warning-border: #fde68a;
+  --cc-warning-solid: #d97706;
+
+  --cc-danger-bg: #fef2f2;
+  --cc-danger-text: #991b1b;
+  --cc-danger-border: #fecaca;
+  --cc-danger-solid: #dc2626;
+
+  --cc-info-bg: #eff6ff;
+  --cc-info-text: #1e40af;
+  --cc-info-border: #bfdbfe;
+  --cc-info-solid: #2563eb;
+
+  /* Typography */
+  --cc-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --cc-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Border Radius */
+  --cc-radius-sm: 4px;
+  --cc-radius-md: 8px;
+  --cc-radius-lg: 12px;
+  --cc-radius-xl: 16px;
+  --cc-radius-full: 9999px;
+
+  /* Shadows */
+  --cc-shadow-xs: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --cc-shadow-sm: 0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px -1px rgba(15, 23, 42, 0.08);
+  --cc-shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --cc-shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+
+  /* Layout */
+  --cc-topbar-height: 64px;
+  --cc-subbar-height: 48px;
+  --cc-container-max: 1400px;
+}
