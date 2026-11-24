@@ -6,7 +6,7 @@ from .views import (
     AppointmentDetailView, AvailableCouponsView, ValidateCouponView,
     AdminSlotListView, AdminCancelSlotView, AdminToggleSlotBlockView,
     AdminRescheduleAppointmentView, HospitalDashboardStatsView,
-    AppointmentCheckInView, AppointmentCompleteView, AppointmentReviewView,
+    AppointmentCheckInView, AppointmentCompleteView, AppointmentRevertCheckInView, AppointmentReviewView,
     HospitalQueueView, HospitalAnalyticsView, HospitalDoctorsView,
     HospitalDoctorDetailView, HospitalSlotsView, HospitalEmergencyView,
     HospitalPaymentsView
@@ -17,6 +17,7 @@ urlpatterns = [
     path('<int:pk>/', AppointmentDetailView.as_view(), name='api_appointment_detail'),
     path('<int:appointment_id>/check-in/', AppointmentCheckInView.as_view(), name='api_appointment_check_in'),
     path('<int:appointment_id>/complete/', AppointmentCompleteView.as_view(), name='api_appointment_complete'),
+    path('<int:appointment_id>/revert-checkin/', AppointmentRevertCheckInView.as_view(), name='api_appointment_revert_checkin'),
     path('<int:appointment_id>/review/', AppointmentReviewView.as_view(), name='api_appointment_review'),
     path('book/', BookAppointmentView.as_view(), name='api_book_appointment'),
     path('available-coupons/', AvailableCouponsView.as_view(), name='api_available_coupons'),

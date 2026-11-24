@@ -154,6 +154,68 @@ export default function HospitalQueuePage() {
     }
   };
 
+  // Revert / Undo Check-in or Completion
+  const handleRevertCheckIn = async (appointmentId) => {
+    setActionLoadingId(appointmentId);
+    try {
+      const res = await api.post(`/appointments/${appointmentId}/revert-checkin/`);
+      toast.success(res.data.message || 'Appointment status reverted to Confirmed.');
+      fetchQueue();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to revert appointment.');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Determine if check-in / complete is allowed (only within 2 hours before the slot)
+  const getCheckInEligibility = (appt) => {
+    const slotDateStr = appt.slot?.date || appt.slot_date;
+    if (!slotDateStr) return { allowed: true, reason: '', badgeText: '' };
+
+    let slotTimeStr = '09:00:00';
+    if (appt.slot && typeof appt.slot === 'object' && appt.slot.start_time) {
+      slotTimeStr = appt.slot.start_time;
+    } else if (appt.slot_time) {
+      slotTimeStr = appt.slot_time;
+    }
+
+    try {
+      const [year, month, day] = slotDateStr.split('-').map(Number);
+      const timeParts = slotTimeStr.split(':').map(Number);
+      const hours = timeParts[0] || 9;
+      const minutes = timeParts[1] || 0;
+
+      const slotDateTime = new Date(year, month - 1, day, hours, minutes, 0);
+      const now = new Date();
+
+      // Earliest check-in is strictly 2 hours before the slot time
+      const earliestCheckIn = new Date(slotDateTime.getTime() - 2 * 60 * 60 * 1000);
+
+      if (now < earliestCheckIn) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        if (slotDateStr > todayStr) {
+          return {
+            allowed: false,
+            reason: `Scheduled for ${slotDateStr}. Check-in only opens 2 hours before the appointment.`,
+            badgeText: `Scheduled ${slotDateStr}`
+          };
+        } else {
+          const openTimeFormatted = earliestCheckIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          return {
+            allowed: false,
+            reason: `Early check-in opens 2 hrs before slot (at ${openTimeFormatted}).`,
+            badgeText: `Opens at ${openTimeFormatted}`
+          };
+        }
+      }
+    } catch (e) {
+      return { allowed: true, reason: '', badgeText: '' };
+    }
+
+    return { allowed: true, reason: '', badgeText: '' };
+  };
+
   // Open Reschedule Modal
   const openRescheduleModal = async (appt) => {
     setRescheduleModal({
@@ -443,7 +505,17 @@ export default function HospitalQueuePage() {
                     const patientRelation = appt.relationship && appt.relationship !== 'Self' ? appt.relationship : null;
                     const receiptId = appt.receipt_id || `APT-${appt.id}`;
                     const slotDate = appt.slot?.date || appt.slot_date || '';
-                    const slotTime = appt.slot ? `${appt.slot.start_time} - ${appt.slot.end_time}` : (appt.slot_time || '');
+                    const slotStartTime = (appt.slot && typeof appt.slot === 'object' && appt.slot.start_time)
+                      ? appt.slot.start_time
+                      : (appt.slot_time || '');
+                    const slotEndTime = (appt.slot && typeof appt.slot === 'object' && appt.slot.end_time)
+                      ? appt.slot.end_time
+                      : (appt.slot_end_time || '');
+                    const slotTime = (slotStartTime && slotEndTime)
+                      ? `${slotStartTime.slice(0, 5)} - ${slotEndTime.slice(0, 5)}`
+                      : (slotStartTime ? slotStartTime.slice(0, 5) : 'General OPD Shift');
+
+                    const checkInEligibility = getCheckInEligibility(appt);
 
                     return (
                       <tr key={appt.id}>
@@ -562,26 +634,67 @@ export default function HospitalQueuePage() {
                             {!isCompleted && !isCancelled && (
                               <>
                                 {!isCheckedIn ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCheckIn(appt.id)}
-                                    disabled={isActionLoading}
-                                    className="cc-btn cc-btn-teal cc-btn-sm"
-                                    title="Check in patient upon arrival"
-                                  >
-                                    <UserCheck size={13} />
-                                    <span>{isActionLoading ? 'Checking in...' : 'Accept Patient'}</span>
-                                  </button>
+                                  checkInEligibility.allowed ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCheckIn(appt.id)}
+                                      disabled={isActionLoading}
+                                      className="cc-btn cc-btn-teal cc-btn-sm"
+                                      title="Check in patient upon arrival"
+                                    >
+                                      <UserCheck size={13} />
+                                      <span>{isActionLoading ? 'Checking in...' : 'Accept Patient'}</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="cc-btn cc-btn-outline cc-btn-sm"
+                                      title={checkInEligibility.reason}
+                                      style={{ opacity: 0.65, cursor: 'not-allowed', backgroundColor: '#f8fafc', borderColor: '#cbd5e1', color: '#64748b' }}
+                                    >
+                                      <Clock size={13} />
+                                      <span>{checkInEligibility.badgeText}</span>
+                                    </button>
+                                  )
                                 ) : (
+                                  checkInEligibility.allowed ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCompleteConsultation(appt.id)}
+                                      disabled={isActionLoading}
+                                      className="cc-btn cc-btn-primary cc-btn-sm"
+                                      title="Mark consultation as completed"
+                                    >
+                                      <CheckCircle2 size={13} />
+                                      <span>{isActionLoading ? 'Saving...' : 'Complete Consultation'}</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="cc-btn cc-btn-outline cc-btn-sm"
+                                      title={checkInEligibility.reason}
+                                      style={{ opacity: 0.65, cursor: 'not-allowed', backgroundColor: '#f8fafc', borderColor: '#cbd5e1', color: '#64748b' }}
+                                    >
+                                      <Clock size={13} />
+                                      <span>{checkInEligibility.badgeText}</span>
+                                    </button>
+                                  )
+                                )}
+
+                                {/* Undo Check-in option for active appointments */}
+                                {isCheckedIn && (
                                   <button
                                     type="button"
-                                    onClick={() => handleCompleteConsultation(appt.id)}
+                                    onClick={() => handleRevertCheckIn(appt.id)}
                                     disabled={isActionLoading}
-                                    className="cc-btn cc-btn-primary cc-btn-sm"
-                                    title="Mark consultation as completed"
+                                    className="cc-btn cc-btn-outline cc-btn-sm"
+                                    title="Undo check-in (revert back to waiting)"
+                                    style={{ color: '#d97706', borderColor: '#fde68a' }}
                                   >
-                                    <CheckCircle2 size={13} />
-                                    <span>{isActionLoading ? 'Saving...' : 'Complete Consultation'}</span>
+                                    <RotateCcw size={12} />
+                                    <span>Undo Check-in</span>
                                   </button>
                                 )}
 
@@ -615,9 +728,22 @@ export default function HospitalQueuePage() {
                               </>
                             )}
                             {isCompleted && (
-                              <span style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 600 }}>
-                                Finished
-                              </span>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 600 }}>
+                                  Finished
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRevertCheckIn(appt.id)}
+                                  disabled={isActionLoading}
+                                  className="cc-btn cc-btn-outline cc-btn-sm"
+                                  title="Undo accidental completion and revert to Confirmed status"
+                                  style={{ fontSize: '0.7rem', padding: '2px 6px', color: '#64748b' }}
+                                >
+                                  <RotateCcw size={11} />
+                                  <span>Revert</span>
+                                </button>
+                              </div>
                             )}
                             {isCancelled && (
                               <span style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 600 }}>

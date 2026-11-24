@@ -662,6 +662,28 @@ class AppointmentCheckInView(APIView):
                 if not matches:
                     return Response({"error": "Unauthorized: Cannot manage appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
+        # Enforce 2-hour early check-in rule: Cannot check in future appointments earlier than 2 hours before the slot
+        from datetime import datetime, timedelta, time as dt_time
+        slot_date = appointment.slot.date if appointment.slot else appointment.slot_date
+        slot_time = appointment.slot.start_time if appointment.slot else None
+        if not slot_time and hasattr(appointment, 'slot_time') and isinstance(appointment.slot_time, dt_time):
+            slot_time = appointment.slot_time
+
+        if slot_date:
+            slot_t = slot_time or dt_time(9, 0)
+            slot_dt = datetime.combine(slot_date, slot_t)
+            current_tz = timezone.get_current_timezone()
+            slot_dt = timezone.make_aware(slot_dt, current_tz)
+            earliest_checkin = slot_dt - timedelta(hours=2)
+            now = timezone.now()
+
+            if now < earliest_checkin:
+                if slot_date > timezone.localdate():
+                    err_msg = f"Check-in disabled. This appointment is scheduled for {slot_date.strftime('%b %d, %Y')} at {slot_t.strftime('%I:%M %p')}. Early check-in only opens 2 hours before the scheduled appointment."
+                else:
+                    err_msg = f"Check-in disabled. Early check-in opens 2 hours before the slot (opens at {earliest_checkin.strftime('%I:%M %p')})."
+                return Response({"error": err_msg}, status=status.HTTP_400_BAD_REQUEST)
+
         appointment.op_checked_in = True
         appointment.op_checked_in_at = timezone.now()
         appointment.save(update_fields=['op_checked_in', 'op_checked_in_at', 'updated_at'])
@@ -697,6 +719,26 @@ class AppointmentCompleteView(APIView):
                 if not matches:
                     return Response({"error": "Unauthorized: Cannot manage appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
+        # Enforce check: Cannot complete consultation for future appointments
+        from datetime import datetime, timedelta, time as dt_time
+        slot_date = appointment.slot.date if appointment.slot else appointment.slot_date
+        slot_time = appointment.slot.start_time if appointment.slot else None
+        if not slot_time and hasattr(appointment, 'slot_time') and isinstance(appointment.slot_time, dt_time):
+            slot_time = appointment.slot_time
+
+        if slot_date:
+            slot_t = slot_time or dt_time(9, 0)
+            slot_dt = datetime.combine(slot_date, slot_t)
+            current_tz = timezone.get_current_timezone()
+            slot_dt = timezone.make_aware(slot_dt, current_tz)
+            earliest_allowed = slot_dt - timedelta(hours=2)
+            now = timezone.now()
+
+            if now < earliest_allowed:
+                return Response({
+                    "error": f"Cannot complete consultation before the scheduled appointment date ({slot_date.strftime('%b %d, %Y')})."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         appointment.status = 'completed'
         appointment.completed_at = timezone.now()
         if not appointment.op_checked_in:
@@ -710,6 +752,42 @@ class AppointmentCompleteView(APIView):
 
         return Response({
             "message": f"Consultation for '{appointment.patient_name or appointment.patient.username}' marked as COMPLETED. Patient can now submit review and rating.",
+            "appointment": AppointmentSerializer(appointment).data
+        })
+
+
+class AppointmentRevertCheckInView(APIView):
+    """Hospital staff / Admin reverts an accidental check-in or completion back to booked/confirmed."""
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def post(self, request, appointment_id):
+        try:
+            appointment = Appointment.objects.select_related('doctor', 'slot', 'patient').get(id=appointment_id)
+        except Appointment.DoesNotExist:
+            return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if user_hosp:
+                doc_hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+                doc_hosp_name = appointment.doctor.hospital_name.strip().lower() if appointment.doctor and appointment.doctor.hospital_name else ''
+                matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+                if not matches:
+                    return Response({"error": "Unauthorized: Cannot manage appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
+
+        appointment.status = 'confirmed'
+        appointment.op_checked_in = False
+        appointment.op_checked_in_at = None
+        appointment.completed_at = None
+        appointment.save(update_fields=['status', 'op_checked_in', 'op_checked_in_at', 'completed_at', 'updated_at'])
+
+        from django.core.cache import cache
+        cache.clear()
+
+        return Response({
+            "message": f"Appointment for '{appointment.patient_name or appointment.patient.username}' successfully reverted to Booked/Confirmed.",
             "appointment": AppointmentSerializer(appointment).data
         })
 
