@@ -44,7 +44,7 @@ def ensure_servers():
         env = os.environ.copy()
         env["ENV_FILE"] = ".env.test"
         backend_proc = subprocess.Popen(
-            [sys.executable, "backend/manage.py", "runserver", "127.0.0.1:8000"],
+            [sys.executable, "backend/manage.py", "runserver", "127.0.0.1:8000", "--noreload"],
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
@@ -97,11 +97,11 @@ def run_click_verification():
 
             # Wait for redirect to /hospital/queue
             page.wait_for_url("**/hospital/queue**", timeout=15000)
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-table", timeout=15000)
             print("   [PASS] Logged in successfully. Current URL:", page.url)
 
             # Check toolbar badge has real count (>0)
-            badge_text = page.locator(".cc-toolbar-badge").inner_text()
+            badge_text = page.locator("#badge-ready-to-admit").inner_text()
             print(f"   [PASS] Toolbar dynamic pending badge: '{badge_text}'")
             assert "0 Pending" not in badge_text, f"Badge should not be 0 Pending, got {badge_text}"
 
@@ -122,7 +122,7 @@ def run_click_verification():
             search_input = page.locator('input[placeholder*="Search by patient name"]')
             search_input.fill(candidate_checkin.patient_name)
             page.wait_for_timeout(600)  # debounce
-            page.wait_for_selector(".cc-queue-table tbody tr", timeout=10000)
+            page.wait_for_selector(".cc-table tbody tr", timeout=10000)
 
             # Locate the 'Accept Patient' button for candidate
             accept_btn = page.locator(f'button:has-text("Accept Patient")').first
@@ -352,7 +352,7 @@ def run_click_verification():
             # ------------------------------------------------------------------
             print("\n[Step 9] Navigating to /hospital/queue and opening Printable Tax Invoice...")
             page.goto("http://localhost:5173/hospital/queue", wait_until="networkidle")
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-table", timeout=15000)
 
             invoice_btn = page.locator('button:has-text("MC-")').first
             invoice_btn.click()
@@ -387,7 +387,7 @@ def run_click_verification():
 
             # Reload browser page
             page.reload(wait_until="networkidle")
-            page.wait_for_selector(".cc-queue-table", timeout=15000)
+            page.wait_for_selector(".cc-table", timeout=15000)
 
             # Assert URL query parameters persisted
             assert "search=Aarav" in page.url, "URL query string search lost after reload!"
@@ -418,7 +418,7 @@ def run_click_verification():
             page.wait_for_timeout(600)
             assert "page_size=25" in page.url, f"URL should reflect page_size=25, got {page.url}"
 
-            row_count_25 = page.locator(".cc-queue-table tbody tr").count()
+            row_count_25 = page.locator(".cc-table tbody tr").count()
             print(f"   [PASS] Page size 25: Rendered {row_count_25} rows on page 1.")
             assert row_count_25 == 25, f"Expected 25 rows, got {row_count_25}"
 
@@ -448,12 +448,12 @@ def run_click_verification():
 
             pages_to_capture = [
                 ("overview_populated", "http://localhost:5173/hospital/overview", ".cc-overview-container"),
-                ("queue_populated", "http://localhost:5173/hospital/queue", ".cc-queue-table"),
+                ("queue_populated", "http://localhost:5173/hospital/queue", ".cc-table"),
                 ("doctors_populated", "http://localhost:5173/hospital/doctors", ".cc-roster-grid"),
                 ("slots_populated", "http://localhost:5173/hospital/slots", ".cc-slots-grid"),
                 ("emergency_populated", "http://localhost:5173/hospital/emergency", ".cc-panel-card"),
-                ("payments_populated", "http://localhost:5173/hospital/payments", ".cc-queue-table"),
-                ("queue_empty_state", "http://localhost:5173/hospital/queue?search=NONEXISTENT_XYZ", ".cc-queue-table"),
+                ("payments_populated", "http://localhost:5173/hospital/payments", ".cc-table"),
+                ("queue_empty_state", "http://localhost:5173/hospital/queue?search=NONEXISTENT_XYZ", ".cc-table"),
             ]
 
             for label, url, wait_sel in pages_to_capture:
