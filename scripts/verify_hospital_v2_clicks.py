@@ -102,12 +102,9 @@ def run_click_verification():
             page.fill('#id_password', "Password123!")
             page.click('button[type="submit"]')
 
-            # Wait for redirect to /hospital/queue and data to finish loading
-            page.wait_for_url("**/hospital/**", timeout=20000)
-            if "/hospital/queue" not in page.url:
-                page.goto("http://localhost:5173/hospital/queue", wait_until="networkidle")
-            page.wait_for_selector(".cc-table tbody tr:not(:has-text('Loading'))", timeout=20000)
-            page.wait_for_function('!document.querySelector("#badge-ready-to-admit")?.innerText.includes("0 Pending")', timeout=20000)
+            # Wait for redirect to /hospital/queue and data to load
+            page.wait_for_url("**/hospital/queue**", timeout=15000)
+            page.wait_for_selector(".cc-patient-cell", timeout=20000)
             print("   [PASS] Logged in successfully. Current URL:", page.url)
 
             # Check toolbar badge has real count (>0)
