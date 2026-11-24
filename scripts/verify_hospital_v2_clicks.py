@@ -237,7 +237,7 @@ def run_click_verification():
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
             print("   [PASS] UI Assertion: Cancellation confirmation modal displayed.")
 
-            confirm_cancel_btn = page.locator('button:has-text("Confirm Full Refund & Cancel")')
+            confirm_cancel_btn = page.locator('button:has-text("Authorize 100% Refund & Cancel")')
             confirm_cancel_btn.click()
 
             # Wait for modal close
@@ -302,29 +302,29 @@ def run_click_verification():
 
             doc_test = Doctor.objects.get(contact_email="dr.arjun.mehta@careconnect.health")
 
-            # Find button Deactivate Specialist for Dr. Arjun Mehta
-            deactivate_btn = page.locator('button:has-text("Deactivate Specialist")').first
+            # Find button Deactivate for Dr. Arjun Mehta
+            deactivate_btn = page.locator('button:has-text("Deactivate")').first
             deactivate_btn.click()
 
-            page.wait_for_selector('button:has-text("Activate Specialist")', timeout=10000)
-            print("   [PASS] UI Assertion: Button changed to 'Activate Specialist'")
+            page.wait_for_selector('button:has-text("Activate")', timeout=10000)
+            print("   [PASS] UI Assertion: Button changed to 'Activate'")
 
             doc_test.refresh_from_db()
             assert doc_test.is_active is False, "DB Assertion Failed: doctor.is_active is True after deactivate"
             print(f"   [PASS] DB Assertion: doctor {doc_test.name} is_active=False")
 
-            # Click Activate Specialist back
-            activate_btn = page.locator('button:has-text("Activate Specialist")').first
+            # Click Activate back
+            activate_btn = page.locator('button:has-text("Activate")').first
             activate_btn.click()
-            page.wait_for_selector('button:has-text("Deactivate Specialist")', timeout=10000)
-            print("   [PASS] UI Assertion: Button changed back to 'Deactivate Specialist'")
+            page.wait_for_selector('button:has-text("Deactivate")', timeout=10000)
+            print("   [PASS] UI Assertion: Button changed back to 'Deactivate'")
 
             doc_test.refresh_from_db()
             assert doc_test.is_active is True, "DB Assertion Failed: doctor.is_active is False after activate"
             print(f"   [PASS] DB Assertion: doctor {doc_test.name} is_active=True")
 
             # Test Edit Profile modal
-            edit_profile_btn = page.locator('button:has-text("Edit Profile")').first
+            edit_profile_btn = page.locator('button:has-text("Edit")').first
             edit_profile_btn.click()
             page.wait_for_selector('.cc-modal-backdrop', timeout=10000)
             print("   [PASS] UI Assertion: Doctor Edit Profile modal opened.")
