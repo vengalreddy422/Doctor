@@ -90,8 +90,9 @@ def run_click_verification():
             # ------------------------------------------------------------------
             print("[Step 1] Logging in as Hospital Staff via UI...")
             page.goto("http://localhost:5173/login", wait_until="networkidle")
-            page.fill('input[type="email"]', "hospital.staff.a@careconnect.health")
-            page.fill('input[type="password"]', "Password123!")
+            page.wait_for_selector("#id_email", timeout=15000)
+            page.fill('#id_email', "hospital.staff.a@careconnect.health")
+            page.fill('#id_password', "Password123!")
             page.click('button[type="submit"]')
 
             # Wait for redirect to /hospital/queue
