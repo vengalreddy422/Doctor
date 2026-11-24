@@ -621,6 +621,17 @@ class AppointmentCheckInView(APIView):
         except Appointment.DoesNotExist:
             return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if user_hosp:
+                doc_hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+                doc_hosp_name = appointment.doctor.hospital_name.strip().lower() if appointment.doctor and appointment.doctor.hospital_name else ''
+                matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+                if not matches:
+                    return Response({"error": "Unauthorized: Cannot manage appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
+
         appointment.op_checked_in = True
         appointment.op_checked_in_at = timezone.now()
         appointment.save(update_fields=['op_checked_in', 'op_checked_in_at', 'updated_at'])
@@ -644,6 +655,17 @@ class AppointmentCompleteView(APIView):
             appointment = Appointment.objects.select_related('doctor', 'slot', 'patient').get(id=appointment_id)
         except Appointment.DoesNotExist:
             return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if user_hosp:
+                doc_hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+                doc_hosp_name = appointment.doctor.hospital_name.strip().lower() if appointment.doctor and appointment.doctor.hospital_name else ''
+                matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+                if not matches:
+                    return Response({"error": "Unauthorized: Cannot manage appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
         appointment.status = 'completed'
         appointment.completed_at = timezone.now()
