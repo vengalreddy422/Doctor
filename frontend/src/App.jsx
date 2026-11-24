@@ -20,10 +20,11 @@ import PaymentHistoryPage from './pages/PaymentHistoryPage';
 import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminDoctorFormPage from './pages/AdminDoctorFormPage';
 import HospitalDashboardPage from './pages/HospitalDashboardPage';
+import HospitalQueuePage from './pages/hospital/HospitalQueuePage';
 
 function App() {
   const location = useLocation();
-  const isDashboard = location.pathname.startsWith('/admin/dashboard') || location.pathname.startsWith('/hospital/dashboard');
+  const isDashboard = location.pathname.startsWith('/admin') || location.pathname.startsWith('/hospital');
 
   return (
     <div className="app-layout" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -76,7 +77,15 @@ function App() {
             }
           />
 
-          {/* Hospital Management Route */}
+          {/* Hospital Management Routes */}
+          <Route
+            path="/hospital/queue"
+            element={
+              <HospitalRoute>
+                <HospitalQueuePage />
+              </HospitalRoute>
+            }
+          />
           <Route
             path="/hospital/dashboard"
             element={

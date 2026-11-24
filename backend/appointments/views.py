@@ -1622,4 +1622,704 @@ class HospitalDashboardStatsView(APIView):
         return Response(payload)
 
 
+def get_hospital_for_user(request):
+    """
+    Resolves and verifies the authorized Hospital facility for a request.
+    Strict multi-tenant security:
+    - 401 if unauthenticated.
+    - 403 if user is not hospital staff or admin.
+    - Hospital staff: strictly scoped to request.user's assigned hospital.
+      If request passes hospital_id, hospital_slug, or hospital_name that does not match, returns 403 Forbidden.
+    - Admin: can inspect any hospital facility, defaulting to first active.
+    """
+    user = request.user
+    if not user or not user.is_authenticated:
+        return None, Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if user.role not in ('admin', 'hospital') and not user.is_superuser:
+        return None, Response({'error': 'Access denied. Hospital staff or admin role required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    param_hosp_id = request.GET.get('hospital_id')
+    param_hosp_slug = request.GET.get('hospital_slug')
+    param_hosp_name = request.GET.get('hospital_name')
+
+    if user.role == 'hospital':
+        user_hosp = getattr(user, 'hospital', None)
+        if not user_hosp and getattr(user, 'hospital_name', None):
+            user_hosp = Hospital.objects.filter(name__iexact=user.hospital_name.strip()).first()
+        if not user_hosp and getattr(user, 'hospital_slug', None):
+            user_hosp = Hospital.objects.filter(slug=user.hospital_slug).first()
+
+        if not user_hosp:
+            return None, Response({'error': 'No hospital facility is assigned to your account.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Multi-tenant cross-hospital access denial
+        if param_hosp_id and str(param_hosp_id).strip() != str(user_hosp.id):
+            return None, Response({'error': 'Unauthorized: Cannot access data from a different hospital facility.'}, status=status.HTTP_403_FORBIDDEN)
+        if param_hosp_slug and param_hosp_slug.strip() != user_hosp.slug:
+            return None, Response({'error': 'Unauthorized: Cannot access data from a different hospital facility.'}, status=status.HTTP_403_FORBIDDEN)
+        if param_hosp_name and param_hosp_name.strip().lower() != user_hosp.name.strip().lower():
+            return None, Response({'error': 'Unauthorized: Cannot access data from a different hospital facility.'}, status=status.HTTP_403_FORBIDDEN)
+
+        return user_hosp, None
+
+    # Superadmin / Admin access
+    if param_hosp_id:
+        target = Hospital.objects.filter(id=param_hosp_id).first()
+        if not target:
+            return None, Response({'error': 'Specified hospital facility not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return target, None
+    elif param_hosp_slug:
+        target = Hospital.objects.filter(slug=param_hosp_slug).first()
+        if not target:
+            return None, Response({'error': 'Specified hospital facility not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return target, None
+    elif param_hosp_name:
+        target = Hospital.objects.filter(name__iexact=param_hosp_name.strip()).first()
+        if not target:
+            return None, Response({'error': 'Specified hospital facility not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return target, None
+
+    target = Hospital.objects.filter(is_active=True).first()
+    return target, None
+
+
+def apply_date_range_filter(qs, date_param, range_param, date_field='slot__date', created_field='created_at__date'):
+    from datetime import timedelta
+    today = timezone.localdate()
+    if date_param:
+        return qs.filter(Q(**{date_field: date_param}) | Q(**{created_field: date_param}))
+    elif range_param == 'today':
+        return qs.filter(Q(**{date_field: today}) | Q(**{created_field: today}))
+    elif range_param == 'yesterday':
+        yesterday = today - timedelta(days=1)
+        return qs.filter(Q(**{date_field: yesterday}) | Q(**{created_field: yesterday}))
+    elif range_param == 'upcoming_7':
+        return qs.filter(**{f"{date_field}__gte": today, f"{date_field}__lte": today + timedelta(days=7)})
+    elif range_param == 'past_7':
+        past7 = today - timedelta(days=7)
+        return qs.filter(Q(**{f"{date_field}__gte": past7, f"{date_field}__lte": today}) | Q(**{f"{created_field}__gte": past7, f"{created_field}__lte": today}))
+    elif range_param == 'this_month':
+        return qs.filter(Q(**{f"{date_field}__year": today.year, f"{date_field}__month": today.month}) | Q(**{f"{created_field}__year": today.year, f"{created_field}__month": today.month}))
+    return qs
+
+
+class HospitalQueueView(APIView):
+    """
+    Paginated Patient Queue endpoint with sub-second response times.
+    Supports server-side pagination, searching, and filtering by doctor, status, and dates.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        )
+        doc_ids = list(doc_qs.values_list('id', flat=True))
+
+        base_qs = Appointment.objects.filter(doctor_id__in=doc_ids).select_related('patient', 'doctor', 'slot')
+
+        date_param = request.GET.get('date', '').strip()
+        range_param = request.GET.get('range', 'all').strip()
+        doctor_id_filter = request.GET.get('doctor_id', '').strip()
+        specialist_filter = request.GET.get('specialization', request.GET.get('specialist', '')).strip()
+        op_status_filter = request.GET.get('op_status', 'all').strip()
+        search_query = request.GET.get('search', '').strip()
+
+        qs = apply_date_range_filter(base_qs, date_param, range_param)
+
+        if doctor_id_filter and doctor_id_filter != 'all':
+            qs = qs.filter(doctor_id=doctor_id_filter)
+
+        if specialist_filter and specialist_filter != 'all':
+            qs = qs.filter(doctor__specialization__iexact=specialist_filter)
+
+        if op_status_filter == 'checked_in':
+            qs = qs.filter(op_checked_in=True)
+        elif op_status_filter == 'waiting':
+            qs = qs.filter(op_checked_in=False, status__in=['pending', 'confirmed'])
+        elif op_status_filter == 'completed':
+            qs = qs.filter(status='completed')
+        elif op_status_filter == 'cancelled':
+            qs = qs.filter(status='cancelled')
+
+        if search_query:
+            qs = qs.filter(
+                Q(patient_name__icontains=search_query) |
+                Q(patient__username__icontains=search_query) |
+                Q(patient__email__icontains=search_query) |
+                Q(doctor__name__icontains=search_query) |
+                Q(receipt_id__icontains=search_query) |
+                Q(patient_phone__icontains=search_query)
+            )
+
+        try:
+            page = max(1, int(request.GET.get('page', 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            page_size = min(100, max(1, int(request.GET.get('page_size', 10))))
+        except (ValueError, TypeError):
+            page_size = 10
+
+        ordered_qs = qs.order_by('-slot__date', '-slot__start_time', '-id')
+        paginator = Paginator(ordered_qs, page_size)
+
+        try:
+            page_obj = paginator.page(page)
+        except Exception:
+            page_obj = paginator.page(paginator.num_pages if paginator.num_pages > 0 else 1)
+            page = page_obj.number
+
+        today = timezone.localdate()
+        today_inflow = base_qs.filter(Q(slot__date=today) | Q(created_at__date=today)).count()
+        ready_to_admit = base_qs.filter(status__in=['pending', 'confirmed'], op_checked_in=False).count()
+        in_chamber = base_qs.filter(op_checked_in=True, status='confirmed').count()
+        completed_today = base_qs.filter(status='completed', completed_at__date=today).count()
+        cancelled_today = base_qs.filter(status='cancelled', slot__date=today).count()
+
+        specializations = sorted(list(set(doc_qs.exclude(specialization='').values_list('specialization', flat=True))))
+        doctors_summary = list(doc_qs.values('id', 'name', 'specialization'))
+
+        return Response({
+            'count': paginator.count,
+            'total_pages': paginator.num_pages,
+            'current_page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'has_previous': page_obj.has_previous(),
+            'summary': {
+                'today_inflow': today_inflow,
+                'ready_to_admit': ready_to_admit,
+                'in_chamber': in_chamber,
+                'completed_today': completed_today,
+                'cancelled_today': cancelled_today,
+                'total_in_filter': paginator.count,
+            },
+            'hospital': {
+                'id': target_hospital.id,
+                'name': target_hospital.name,
+                'slug': target_hospital.slug,
+            },
+            'specializations': specializations,
+            'doctors': doctors_summary,
+            'results': AppointmentSerializer(page_obj.object_list, many=True).data,
+        })
+
+
+class HospitalAnalyticsView(APIView):
+    """
+    Aggregated Hospital Analytics API backed by real PostgreSQL data.
+    Provides hourly arrivals distribution (TruncHour on op_checked_in_at),
+    doctor occupancy %, status breakdown, financial net collections, and satisfaction scores.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        from datetime import timedelta
+        from django.db.models.functions import TruncHour
+        from django.db.models import Avg
+
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        )
+        doc_ids = list(doc_qs.values_list('id', flat=True))
+        base_appts = Appointment.objects.filter(doctor_id__in=doc_ids)
+
+        today = timezone.localdate()
+        date_param = request.GET.get('date', '').strip()
+        range_param = request.GET.get('range', 'all').strip()
+
+        scoped_appts = apply_date_range_filter(base_appts, date_param, range_param)
+
+        status_counts = scoped_appts.aggregate(
+            total=Count('id'),
+            confirmed=Count('id', filter=Q(status='confirmed')),
+            completed=Count('id', filter=Q(status='completed')),
+            pending=Count('id', filter=Q(status='pending')),
+            cancelled=Count('id', filter=Q(status='cancelled')),
+            checked_in=Count('id', filter=Q(op_checked_in=True)),
+        )
+
+        hourly_raw = (
+            base_appts.filter(op_checked_in=True, op_checked_in_at__isnull=False)
+            .filter(Q(op_checked_in_at__date=today) | Q(slot__date=today))
+            .annotate(hour_slot=TruncHour('op_checked_in_at'))
+            .values('hour_slot')
+            .annotate(count=Count('id'))
+            .order_by('hour_slot')
+        )
+        hourly_arrivals = []
+        for entry in hourly_raw:
+            if entry['hour_slot']:
+                hourly_arrivals.append({
+                    'hour': entry['hour_slot'].strftime('%H:00'),
+                    'count': entry['count'],
+                })
+
+        doctors_occupancy = []
+        for doc in doc_qs.filter(is_active=True).order_by('name'):
+            doc_slots = Slot.objects.filter(doctor=doc, date=today)
+            total_slots = doc_slots.count()
+            capacity = total_slots * 5
+            booked_count = Appointment.objects.filter(
+                doctor=doc,
+                slot__date=today,
+                status__in=['confirmed', 'completed', 'pending']
+            ).count()
+            rate = round((booked_count / capacity * 100), 1) if capacity > 0 else 0
+            doctors_occupancy.append({
+                'doctor_id': doc.id,
+                'doctor_name': doc.name,
+                'specialization': doc.specialization,
+                'total_slots': total_slots,
+                'total_capacity': capacity,
+                'booked_count': booked_count,
+                'occupancy_rate': rate,
+            })
+
+        payment_metrics = Payment.objects.filter(
+            appointment__doctor_id__in=doc_ids
+        ).aggregate(
+            collected=Sum('amount', filter=Q(status='paid')),
+            refunded=Sum('amount', filter=Q(status='refunded')),
+        )
+        collected = payment_metrics['collected'] or Decimal('0.00')
+        refunded = payment_metrics['refunded'] or Decimal('0.00')
+        net_revenue = max(Decimal('0.00'), collected - refunded)
+
+        rating_metrics = base_appts.filter(is_reviewed=True).aggregate(
+            avg_doctor=Avg('doctor_rating'),
+            avg_hospital=Avg('hospital_rating'),
+            avg_management=Avg('management_rating'),
+            review_count=Count('id'),
+        )
+
+        return Response({
+            'hospital': {
+                'id': target_hospital.id,
+                'name': target_hospital.name,
+                'slug': target_hospital.slug,
+                'city': target_hospital.city,
+            },
+            'kpis': {
+                'total_patients': status_counts['total'] or 0,
+                'completed': status_counts['completed'] or 0,
+                'confirmed': status_counts['confirmed'] or 0,
+                'pending': status_counts['pending'] or 0,
+                'cancelled': status_counts['cancelled'] or 0,
+                'checked_in': status_counts['checked_in'] or 0,
+                'net_revenue': str(net_revenue),
+                'total_collected': str(collected),
+                'total_refunded': str(refunded),
+                'active_doctors_count': doc_qs.filter(is_active=True).count(),
+                'total_doctors_count': doc_qs.count(),
+            },
+            'hourly_arrivals': hourly_arrivals,
+            'doctors_occupancy': doctors_occupancy,
+            'ratings': {
+                'average_doctor': round(rating_metrics['avg_doctor'] or 0, 1),
+                'average_hospital': round(rating_metrics['avg_hospital'] or 0, 1),
+                'average_management': round(rating_metrics['avg_management'] or 0, 1),
+                'total_reviews': rating_metrics['review_count'] or 0,
+            }
+        })
+
+
+class HospitalDoctorsView(APIView):
+    """
+    Roster management endpoint for Hospital specialists.
+    List doctors, toggle active status, or update doctor profile.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        ).select_related('hospital')
+
+        search = request.GET.get('search', '').strip()
+        status_filter = request.GET.get('status', 'all').strip()
+
+        if search:
+            doc_qs = doc_qs.filter(Q(name__icontains=search) | Q(specialization__icontains=search))
+        if status_filter == 'active':
+            doc_qs = doc_qs.filter(is_active=True)
+        elif status_filter == 'inactive':
+            doc_qs = doc_qs.filter(is_active=False)
+
+        doctors = DoctorSerializer(doc_qs.order_by('name'), many=True, context={'request': request}).data
+        return Response({
+            'hospital_id': target_hospital.id,
+            'hospital_name': target_hospital.name,
+            'count': len(doctors),
+            'doctors': doctors,
+        })
+
+    def post(self, request):
+        """Toggle doctor active status."""
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doctor_id = request.data.get('doctor_id')
+        if not doctor_id:
+            return Response({'error': 'doctor_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        doctor = Doctor.objects.filter(id=doctor_id).first()
+        if not doctor:
+            return Response({'error': 'Doctor not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Cross-hospital tenant isolation check
+        doc_hosp_id = doctor.hospital_id
+        doc_hosp_name = doctor.hospital_name.strip().lower() if doctor.hospital_name else ''
+        if request.user.role == 'hospital' and (doc_hosp_id != target_hospital.id and doc_hosp_name != target_hospital.name.strip().lower()):
+            return Response({'error': 'Unauthorized: Doctor belongs to another facility.'}, status=status.HTTP_403_FORBIDDEN)
+
+        doctor.is_active = not doctor.is_active
+        doctor.save(update_fields=['is_active'])
+
+        return Response({
+            'message': f"Doctor '{doctor.name}' is now {'Active' if doctor.is_active else 'Inactive'}.",
+            'doctor': DoctorSerializer(doctor, context={'request': request}).data
+        })
+
+
+class HospitalDoctorDetailView(APIView):
+    """Update doctor profile details scoped to the hospital facility."""
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def patch(self, request, doctor_id):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doctor = Doctor.objects.filter(id=doctor_id).first()
+        if not doctor:
+            return Response({'error': 'Doctor not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        doc_hosp_id = doctor.hospital_id
+        doc_hosp_name = doctor.hospital_name.strip().lower() if doctor.hospital_name else ''
+        if request.user.role == 'hospital' and (doc_hosp_id != target_hospital.id and doc_hosp_name != target_hospital.name.strip().lower()):
+            return Response({'error': 'Unauthorized: Doctor belongs to another facility.'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = DoctorSerializer(doctor, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'message': f"Doctor '{doctor.name}' profile updated successfully.",
+                'doctor': serializer.data
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request, doctor_id):
+        return self.patch(request, doctor_id)
+
+
+class HospitalSlotsView(APIView):
+    """
+    Real-time slot capacity monitor for Hospital facility.
+    Lists slots with booked count, capacity, occupancy rate, and supports block/unblock.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        )
+        doc_ids = list(doc_qs.values_list('id', flat=True))
+
+        today = timezone.localdate()
+        date_param = request.GET.get('date', '').strip()
+        doctor_id_filter = request.GET.get('doctor_id', '').strip()
+
+        slots_qs = Slot.objects.filter(doctor_id__in=doc_ids).select_related('doctor')
+
+        if date_param:
+            slots_qs = slots_qs.filter(date=date_param)
+        else:
+            slots_qs = slots_qs.filter(date__gte=today)
+
+        if doctor_id_filter and doctor_id_filter != 'all':
+            slots_qs = slots_qs.filter(doctor_id=doctor_id_filter)
+
+        slots_annotated = slots_qs.annotate(
+            booked_count=Count(
+                'appointments',
+                filter=Q(appointments__status__in=['pending', 'confirmed', 'completed'])
+            )
+        ).order_by('date', 'start_time')[:200]
+
+        slots_data = []
+        for s in slots_annotated:
+            slots_data.append({
+                'id': s.id,
+                'doctor_id': s.doctor.id,
+                'doctor_name': s.doctor.name,
+                'doctor_specialization': s.doctor.specialization,
+                'date': str(s.date),
+                'start_time': s.start_time.strftime('%H:%M'),
+                'end_time': s.end_time.strftime('%H:%M'),
+                'is_blocked': s.is_blocked,
+                'booked_count': s.booked_count,
+                'capacity': 5,
+                'occupancy_rate': round((s.booked_count / 5) * 100, 1),
+                'is_full': s.booked_count >= 5,
+            })
+
+        return Response({
+            'hospital_id': target_hospital.id,
+            'hospital_name': target_hospital.name,
+            'count': len(slots_data),
+            'slots': slots_data,
+        })
+
+    def post(self, request):
+        """Toggle slot block/unblock state."""
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        slot_id = request.data.get('slot_id')
+        if not slot_id:
+            return Response({'error': 'slot_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        slot = Slot.objects.select_related('doctor').filter(id=slot_id).first()
+        if not slot:
+            return Response({'error': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        doc_hosp_id = slot.doctor.hospital_id
+        doc_hosp_name = slot.doctor.hospital_name.strip().lower() if slot.doctor.hospital_name else ''
+        if request.user.role == 'hospital' and (doc_hosp_id != target_hospital.id and doc_hosp_name != target_hospital.name.strip().lower()):
+            return Response({'error': 'Unauthorized: Slot belongs to another facility.'}, status=status.HTTP_403_FORBIDDEN)
+
+        slot.is_blocked = not slot.is_blocked
+        slot.save(update_fields=['is_blocked'])
+
+        return Response({
+            'message': f"Slot on {slot.date} {slot.start_time.strftime('%H:%M')} is now {'Blocked' if slot.is_blocked else 'Active'}.",
+            'slot_id': slot.id,
+            'is_blocked': slot.is_blocked,
+        })
+
+
+class HospitalEmergencyView(APIView):
+    """
+    Emergency Slot Resolution Hub.
+    Lists affected appointments from blocked/cancelled slots and allows staff to
+    execute mass auto-reschedule or 100% full refund with notification emails.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        )
+        doc_ids = list(doc_qs.values_list('id', flat=True))
+
+        # Appointments requiring emergency resolution (e.g. slot blocked or status pending action)
+        appts = Appointment.objects.filter(
+            doctor_id__in=doc_ids,
+            status__in=['pending', 'confirmed']
+        ).filter(
+            Q(slot__is_blocked=True) | Q(notes__icontains='emergency') | Q(notes__icontains='cancel')
+        ).select_related('doctor', 'slot', 'patient').order_by('slot__date', 'slot__start_time')
+
+        return Response({
+            'hospital_id': target_hospital.id,
+            'count': appts.count(),
+            'appointments': AppointmentSerializer(appts, many=True).data,
+        })
+
+    def post(self, request):
+        """
+        Execute emergency resolution for a slot:
+        resolution: 'refund' | 'reschedule'
+        """
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        slot_id = request.data.get('slot_id')
+        resolution = request.data.get('resolution', 'refund').strip().lower()
+        reason = request.data.get('reason', 'Emergency doctor unavailability').strip()
+
+        if not slot_id:
+            return Response({'error': 'slot_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        slot = Slot.objects.select_related('doctor').filter(id=slot_id).first()
+        if not slot:
+            return Response({'error': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        doc_hosp_id = slot.doctor.hospital_id
+        doc_hosp_name = slot.doctor.hospital_name.strip().lower() if slot.doctor.hospital_name else ''
+        if request.user.role == 'hospital' and (doc_hosp_id != target_hospital.id and doc_hosp_name != target_hospital.name.strip().lower()):
+            return Response({'error': 'Unauthorized: Slot belongs to another facility.'}, status=status.HTTP_403_FORBIDDEN)
+
+        affected_appts = list(Appointment.objects.filter(
+            slot=slot,
+            status__in=['pending', 'confirmed']
+        ).select_related('patient', 'doctor'))
+
+        resolved_count = 0
+        if resolution == 'refund':
+            for appt in affected_appts:
+                appt.status = 'cancelled'
+                appt.refund_status = 'full'
+                appt.notes = f"Emergency cancellation: {reason}"
+                appt.save(update_fields=['status', 'refund_status', 'notes', 'updated_at'])
+                try:
+                    send_admin_slot_cancellation_email(appt, reason)
+                except Exception:
+                    pass
+                resolved_count += 1
+            slot.is_blocked = True
+            slot.save(update_fields=['is_blocked'])
+        elif resolution == 'reschedule':
+            # Find next available unblocked slot for the same doctor
+            next_slot = Slot.objects.filter(
+                doctor=slot.doctor,
+                date__gt=slot.date,
+                is_blocked=False
+            ).order_by('date', 'start_time').first()
+            if not next_slot:
+                return Response({'error': 'No future slot available for auto-reschedule. Please select refund instead.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            for appt in affected_appts:
+                old_time = f"{appt.slot.date} {appt.slot.start_time}"
+                appt.slot = next_slot
+                appt.reschedule_count = (appt.reschedule_count or 0) + 1
+                appt.last_rescheduled_at = timezone.now()
+                appt.notes = f"Auto-rescheduled from {old_time} due to: {reason}"
+                appt.save(update_fields=['slot', 'reschedule_count', 'last_rescheduled_at', 'notes', 'updated_at'])
+                try:
+                    send_admin_reschedule_email(appt, old_time)
+                except Exception:
+                    pass
+                resolved_count += 1
+            slot.is_blocked = True
+            slot.save(update_fields=['is_blocked'])
+
+        return Response({
+            'message': f"Emergency resolution complete. {resolved_count} patient appointments processed via {resolution.upper()}.",
+            'resolved_count': resolved_count,
+            'resolution': resolution,
+        })
+
+
+class HospitalPaymentsView(APIView):
+    """
+    Hospital OPD Cashier Financial Ledger endpoint.
+    Scoped strictly to the facility's appointments with pagination,
+    filtering by payment status (paid, refunded), date range, and search.
+    """
+    permission_classes = [IsHospitalOrAdminRole]
+
+    def get(self, request):
+        target_hospital, err_resp = get_hospital_for_user(request)
+        if err_resp:
+            return err_resp
+
+        doc_qs = Doctor.objects.filter(
+            Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
+        )
+        doc_ids = list(doc_qs.values_list('id', flat=True))
+
+        payments_qs = Payment.objects.filter(
+            appointment__doctor_id__in=doc_ids
+        ).select_related('patient', 'appointment', 'appointment__doctor', 'appointment__slot')
+
+        date_param = request.GET.get('date', '').strip()
+        range_param = request.GET.get('range', 'all').strip()
+        status_filter = request.GET.get('status', 'all').strip()
+        search_query = request.GET.get('search', '').strip()
+
+        payments_qs = apply_date_range_filter(payments_qs, date_param, range_param, date_field='created_at__date', created_field='created_at__date')
+
+        if status_filter and status_filter != 'all':
+            payments_qs = payments_qs.filter(status=status_filter)
+
+        if search_query:
+            payments_qs = payments_qs.filter(
+                Q(patient__username__icontains=search_query) |
+                Q(patient__email__icontains=search_query) |
+                Q(razorpay_order_id__icontains=search_query) |
+                Q(razorpay_payment_id__icontains=search_query) |
+                Q(appointment__receipt_id__icontains=search_query) |
+                Q(appointment__patient_name__icontains=search_query) |
+                Q(appointment__doctor__name__icontains=search_query)
+            )
+
+        # Financial totals for filtered scope
+        totals = payments_qs.aggregate(
+            collected=Sum('amount', filter=Q(status='paid')),
+            refunded=Sum('amount', filter=Q(status='refunded')),
+            tx_count=Count('id'),
+        )
+        collected = totals['collected'] or Decimal('0.00')
+        refunded = totals['refunded'] or Decimal('0.00')
+        net = max(Decimal('0.00'), collected - refunded)
+
+        try:
+            page = max(1, int(request.GET.get('page', 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            page_size = min(100, max(1, int(request.GET.get('page_size', 10))))
+        except (ValueError, TypeError):
+            page_size = 10
+
+        ordered_qs = payments_qs.order_by('-created_at')
+        paginator = Paginator(ordered_qs, page_size)
+
+        try:
+            page_obj = paginator.page(page)
+        except Exception:
+            page_obj = paginator.page(paginator.num_pages if paginator.num_pages > 0 else 1)
+            page = page_obj.number
+
+        return Response({
+            'count': paginator.count,
+            'total_pages': paginator.num_pages,
+            'current_page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'has_previous': page_obj.has_previous(),
+            'totals': {
+                'gross_collected': str(collected),
+                'refunded': str(refunded),
+                'net_collections': str(net),
+                'transaction_volume': totals['tx_count'] or 0,
+            },
+            'hospital': {
+                'id': target_hospital.id,
+                'name': target_hospital.name,
+            },
+            'results': PaymentSerializer(page_obj.object_list, many=True).data,
+        })
+
+
+
 

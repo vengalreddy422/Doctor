@@ -6,7 +6,10 @@ from .views import (
     AppointmentDetailView, AvailableCouponsView, ValidateCouponView,
     AdminSlotListView, AdminCancelSlotView, AdminToggleSlotBlockView,
     AdminRescheduleAppointmentView, HospitalDashboardStatsView,
-    AppointmentCheckInView, AppointmentCompleteView, AppointmentReviewView
+    AppointmentCheckInView, AppointmentCompleteView, AppointmentReviewView,
+    HospitalQueueView, HospitalAnalyticsView, HospitalDoctorsView,
+    HospitalDoctorDetailView, HospitalSlotsView, HospitalEmergencyView,
+    HospitalPaymentsView
 )
 
 urlpatterns = [
@@ -28,7 +31,14 @@ urlpatterns = [
     
     # Hospital Management endpoints
     path('hospital/stats/', HospitalDashboardStatsView.as_view(), name='hospital_dashboard_stats'),
+    path('hospital/queue/', HospitalQueueView.as_view(), name='hospital_queue'),
+    path('hospital/analytics/', HospitalAnalyticsView.as_view(), name='hospital_analytics'),
+    path('hospital/doctors/', HospitalDoctorsView.as_view(), name='hospital_doctors'),
+    path('hospital/doctors/<int:doctor_id>/', HospitalDoctorDetailView.as_view(), name='hospital_doctor_detail'),
+    path('hospital/slots/', HospitalSlotsView.as_view(), name='hospital_slots'),
     path('hospital/slots/<int:slot_id>/cancel/', AdminCancelSlotView.as_view(), name='hospital_cancel_slot'),
+    path('hospital/emergency/', HospitalEmergencyView.as_view(), name='hospital_emergency'),
+    path('hospital/payments/', HospitalPaymentsView.as_view(), name='hospital_payments'),
 
     # Admin endpoints
     path('admin/all/', AdminAppointmentListView.as_view(), name='admin_appointment_list'),
