@@ -20,6 +20,9 @@ class Slot(models.Model):
     class Meta:
         unique_together = ('doctor', 'date', 'start_time')
         ordering = ['date', 'start_time']
+        indexes = [
+            models.Index(fields=['doctor', 'date'], name='slot_doctor_date_idx'),
+        ]
 
     def __str__(self):
         end = f'–{self.end_time:%H:%M}' if self.end_time else ''
@@ -179,6 +182,12 @@ class Appointment(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['doctor', 'status'], name='appt_doctor_status_idx'),
+            models.Index(fields=['doctor', 'op_checked_in'], name='appt_doc_checkin_idx'),
+            models.Index(fields=['doctor', 'created_at'], name='appt_doc_created_idx'),
+            models.Index(fields=['slot', 'status'], name='appt_slot_status_idx'),
+        ]
 
     def __str__(self):
         return f"{self.patient.email} → {self.doctor.name} ({self.slot.date} {self.slot.start_time})"

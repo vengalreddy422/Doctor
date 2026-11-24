@@ -1763,7 +1763,9 @@ def get_hospital_for_user(request):
 
 def apply_date_range_filter(qs, date_param, range_param, date_field='slot__date', created_field='created_at__date'):
     from datetime import timedelta
-    today = timezone.localdate()
+    import zoneinfo
+    kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+    today = timezone.now().astimezone(kolkata_tz).date()
     if date_param:
         return qs.filter(Q(**{date_field: date_param}) | Q(**{created_field: date_param}))
     elif range_param == 'today':
@@ -1892,13 +1894,15 @@ class HospitalQueueView(APIView):
 class HospitalAnalyticsView(APIView):
     """
     Aggregated Hospital Analytics API backed by real PostgreSQL data.
-    Provides hourly arrivals distribution (TruncHour on op_checked_in_at),
-    doctor occupancy %, status breakdown, financial net collections, and satisfaction scores.
+    Provides 60-second caching, Asia/Kolkata day boundaries, 14-day dynamic trends,
+    7-day sparklines, 'prior period = 0' growth metrics, doctor occupancy %, and satisfaction scores.
     """
     permission_classes = [IsHospitalOrAdminRole]
 
     def get(self, request):
-        from datetime import timedelta
+        import zoneinfo
+        from datetime import datetime, timedelta
+        from django.core.cache import cache
         from django.db.models.functions import TruncHour
         from django.db.models import Avg
 
@@ -1906,15 +1910,25 @@ class HospitalAnalyticsView(APIView):
         if err_resp:
             return err_resp
 
+        date_param = request.GET.get('date', '').strip()
+        range_param = request.GET.get('range', 'all').strip()
+        force_refresh = request.GET.get('refresh', '').lower() == 'true'
+
+        cache_key = f"hosp_analytics_{target_hospital.id}_{range_param}_{date_param}"
+        if not force_refresh:
+            cached_res = cache.get(cache_key)
+            if cached_res is not None:
+                return Response(cached_res)
+
+        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+        now_kolkata = timezone.now().astimezone(kolkata_tz)
+        today = now_kolkata.date()
+
         doc_qs = Doctor.objects.filter(
             Q(hospital=target_hospital) | Q(hospital_name__iexact=target_hospital.name)
         )
         doc_ids = list(doc_qs.values_list('id', flat=True))
         base_appts = Appointment.objects.filter(doctor_id__in=doc_ids)
-
-        today = timezone.localdate()
-        date_param = request.GET.get('date', '').strip()
-        range_param = request.GET.get('range', 'all').strip()
 
         scoped_appts = apply_date_range_filter(base_appts, date_param, range_param)
 
@@ -1981,7 +1995,51 @@ class HospitalAnalyticsView(APIView):
             review_count=Count('id'),
         )
 
-        return Response({
+        # 14-day trend calculation (volume, gross revenue, refunds, net)
+        fourteen_day_trend = []
+        for i in range(13, -1, -1):
+            d = today - timedelta(days=i)
+            day_start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=kolkata_tz)
+            day_end = day_start + timedelta(days=1)
+            d_vol = base_appts.filter(Q(slot__date=d) | Q(created_at__gte=day_start, created_at__lt=day_end)).count()
+            d_pay = Payment.objects.filter(
+                appointment__doctor_id__in=doc_ids,
+                created_at__gte=day_start,
+                created_at__lt=day_end
+            ).aggregate(
+                c=Sum('amount', filter=Q(status='paid')),
+                r=Sum('amount', filter=Q(status='refunded'))
+            )
+            c_val = d_pay['c'] or Decimal('0.00')
+            r_val = d_pay['r'] or Decimal('0.00')
+            fourteen_day_trend.append({
+                'date': d.strftime('%Y-%m-%d'),
+                'label': d.strftime('%d %b'),
+                'volume': d_vol,
+                'gross': float(c_val),
+                'refunds': float(r_val),
+                'net': float(max(Decimal('0.00'), c_val - r_val)),
+            })
+
+        # 7-day sparkline arrays and prior-period comparison
+        sparkline_patients = [day['volume'] for day in fourteen_day_trend[7:]]
+        sparkline_revenue = [day['net'] for day in fourteen_day_trend[7:]]
+
+        # Prior 7 days vs Current 7 days
+        prior_vol = sum(day['volume'] for day in fourteen_day_trend[:7])
+        curr_vol = sum(day['volume'] for day in fourteen_day_trend[7:])
+        prior_rev = sum(day['net'] for day in fourteen_day_trend[:7])
+        curr_rev = sum(day['net'] for day in fourteen_day_trend[7:])
+
+        def calc_pct_growth(curr, prior):
+            if prior == 0:
+                if curr == 0:
+                    return "0.0%"
+                return "+100.0% (Initial Period)"
+            diff = ((Decimal(str(curr)) - Decimal(str(prior))) / Decimal(str(prior))) * 100
+            return f"{diff:+.1f}%"
+
+        result_data = {
             'hospital': {
                 'id': target_hospital.id,
                 'name': target_hospital.name,
@@ -2001,6 +2059,15 @@ class HospitalAnalyticsView(APIView):
                 'active_doctors_count': doc_qs.filter(is_active=True).count(),
                 'total_doctors_count': doc_qs.count(),
             },
+            'sparklines': {
+                'patients': sparkline_patients,
+                'revenue': sparkline_revenue,
+            },
+            'growth': {
+                'patients_pct': calc_pct_growth(curr_vol, prior_vol),
+                'revenue_pct': calc_pct_growth(curr_rev, prior_rev),
+            },
+            'fourteen_day_trend': fourteen_day_trend,
             'hourly_arrivals': hourly_arrivals,
             'doctors_occupancy': doctors_occupancy,
             'ratings': {
@@ -2009,7 +2076,12 @@ class HospitalAnalyticsView(APIView):
                 'average_management': round(rating_metrics['avg_management'] or 0, 1),
                 'total_reviews': rating_metrics['review_count'] or 0,
             }
-        })
+        }
+
+        # Cache for 60 seconds
+        cache.set(cache_key, result_data, timeout=60)
+
+        return Response(result_data)
 
 
 class HospitalDoctorsView(APIView):
