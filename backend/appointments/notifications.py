@@ -325,3 +325,8 @@ def send_admin_reschedule_email(appointment, old_slot_info=None, reason="Adminis
         print(f"Failed to send admin reschedule email: {e}")
 
 
+def send_reschedule_notification(appointment, old_slot_info=None):
+    """Send confirmation email to patient after appointment reschedule."""
+    return send_admin_reschedule_email(appointment, old_slot_info=old_slot_info, reason="Patient Requested Reschedule")
+
+

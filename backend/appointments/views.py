@@ -25,7 +25,8 @@ from .serializers import (
 from .services import calculate_fee
 from .notifications import (
     send_booking_confirmation, send_cancellation_notification,
-    send_admin_slot_cancellation_email, send_admin_reschedule_email
+    send_admin_slot_cancellation_email, send_admin_reschedule_email,
+    send_reschedule_notification
 )
 
 User = get_user_model()
@@ -394,15 +395,18 @@ class CancelAppointmentView(APIView):
 
     def post(self, request, appointment_id):
         reason = request.data.get('reason', 'Patient schedule change / personal reason').strip()
+        is_admin = request.user.role == 'admin' or request.user.is_staff
 
         with transaction.atomic():
             try:
-                appointment = (
+                appt_qs = (
                     Appointment.objects
                     .select_for_update()
                     .select_related('slot', 'doctor', 'patient')
-                    .get(id=appointment_id, patient=request.user)
                 )
+                if not is_admin:
+                    appt_qs = appt_qs.filter(patient=request.user)
+                appointment = appt_qs.get(id=appointment_id)
             except Appointment.DoesNotExist:
                 return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -415,21 +419,41 @@ class CancelAppointmentView(APIView):
 
             if not appointment.is_cancellable:
                 return Response(
-                    {"error": f"Cannot cancel an appointment with status '{appointment.get_status_display()}'."},
+                    {"error": f"Cannot cancel an appointment with status '{appointment.get_status_display()}' or if patient has already checked in."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            refund_info = appointment.calculate_cancellation_refund()
+            # Check payment record to determine if any fee was paid
+            payment = Payment.objects.select_for_update().filter(appointment=appointment).first()
+            has_paid = payment is not None and payment.status == 'paid' and bool(payment.razorpay_payment_id)
+
+            if not has_paid:
+                # C4: Unpaid / pending appointment cancels with no refund and no Razorpay call
+                refund_info = {
+                    'hours_remaining': appointment.get_hours_until_slot(),
+                    'fee_paid': '0.00',
+                    'refund_percentage': 0,
+                    'deduction_percentage': 0,
+                    'deduction_amount': '0.00',
+                    'refund_amount': '0.00',
+                    'tier_label': 'Unpaid / No Refund Initiated',
+                    'tier_code': 'unpaid_none',
+                }
+                appointment.cancellation_fee = Decimal('0.00')
+                appointment.refund_amount = Decimal('0.00')
+                appointment.refund_status = 'none'
+            else:
+                refund_info = appointment.calculate_cancellation_refund()
+                appointment.cancellation_fee = Decimal(refund_info['deduction_amount'])
+                appointment.refund_amount = Decimal(refund_info['refund_amount'])
+                if Decimal(refund_info['refund_amount']) > Decimal('0.00'):
+                    appointment.refund_status = 'full' if Decimal(refund_info['deduction_amount']) == Decimal('0.00') else 'partial'
+                else:
+                    appointment.refund_status = 'none'
 
             appointment.status = 'cancelled'
-            appointment.cancelled_by = 'patient'
+            appointment.cancelled_by = 'admin' if is_admin and appointment.patient != request.user else 'patient'
             appointment.cancellation_reason = reason
-            appointment.cancellation_fee = Decimal(refund_info['deduction_amount'])
-            appointment.refund_amount = Decimal(refund_info['refund_amount'])
-            if Decimal(refund_info['refund_amount']) > Decimal('0.00'):
-                appointment.refund_status = 'full' if Decimal(refund_info['deduction_amount']) == Decimal('0.00') else 'partial'
-            else:
-                appointment.refund_status = 'none'
             appointment.cancelled_at = timezone.now()
             appointment.save(update_fields=[
                 'status', 'cancelled_by', 'cancellation_reason',
@@ -438,8 +462,7 @@ class CancelAppointmentView(APIView):
             ])
 
             # Update linked payment status and trigger Razorpay refund API if eligible (with idempotency lock)
-            payment = Payment.objects.select_for_update().filter(appointment=appointment).first()
-            if payment:
+            if payment and has_paid:
                 refund_amt = Decimal(refund_info['refund_amount'])
                 already_refunded = bool(payment.razorpay_refund_id or payment.status == 'refunded' or getattr(payment, 'refund_status', None) == 'processed')
                 if refund_amt > Decimal('0.00') and payment.razorpay_payment_id and not already_refunded:
@@ -490,82 +513,101 @@ class RescheduleAppointmentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, appointment_id):
-        appointment = get_object_or_404(
-            Appointment.objects.select_related('doctor', 'slot'),
-            id=appointment_id, patient=request.user
+        is_admin = request.user.role == 'admin' or request.user.is_staff
+        appt_qs = (
+            Appointment.objects
+            .select_related('doctor', 'slot', 'patient')
         )
+        if not is_admin:
+            appt_qs = appt_qs.filter(patient=request.user)
+        try:
+            appointment = appt_qs.get(id=appointment_id)
+        except Appointment.DoesNotExist:
+            return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
 
         eligible, reason = appointment.check_reschedule_eligibility()
-        if not eligible:
+        if not eligible and not (is_admin and "already checked in" not in reason):
             return Response(
                 {"error": reason},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # R1: One reschedule per appointment per calendar day (Asia/Kolkata)
-        import zoneinfo
-        import datetime
-        kolkata_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
-        now_kolkata = timezone.now().astimezone(kolkata_tz)
-        if appointment.last_rescheduled_at:
-            last_kolkata = appointment.last_rescheduled_at.astimezone(kolkata_tz)
-            if last_kolkata.date() == now_kolkata.date():
-                tomorrow_date = now_kolkata.date() + datetime.timedelta(days=1)
-                allowed_at_str = f"{tomorrow_date} at 00:00 IST"
-                return Response(
-                    {"error": f"Only one reschedule per appointment per calendar day is permitted. You can reschedule this appointment again on {allowed_at_str}."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
         new_slot_id = request.data.get('new_slot_id')
-        if new_slot_id:
+        if not new_slot_id:
+            return Response({
+                "message": "Please select a new slot to complete the reschedule.",
+                "doctor_id": appointment.doctor.id
+            })
+
+        try:
+            target_slot_id = int(new_slot_id)
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid target slot ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # R2: Rescheduling to the SAME slot is rejected
+        if target_slot_id == appointment.slot_id:
+            return Response(
+                {"error": "Cannot reschedule to the same slot. Please select a different consultation slot."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            # Lock appointment for concurrency safety
+            appointment = (
+                Appointment.objects
+                .select_for_update()
+                .select_related('doctor', 'slot', 'patient')
+                .get(id=appointment.id)
+            )
+
+            # Re-check daily quota under lock
+            eligible, reason = appointment.check_reschedule_eligibility()
+            if not eligible and not (is_admin and "already checked in" not in reason):
+                return Response({"error": reason}, status=status.HTTP_400_BAD_REQUEST)
+
             try:
-                target_slot_id_int = int(new_slot_id)
-            except (ValueError, TypeError):
-                return Response({"error": "Invalid target slot ID."}, status=status.HTTP_400_BAD_REQUEST)
+                new_slot = Slot.objects.select_for_update().select_related('doctor').get(id=target_slot_id)
+            except Slot.DoesNotExist:
+                return Response({"error": "Target slot not found."}, status=status.HTTP_404_NOT_FOUND)
 
-            # R2: Rescheduling to the SAME slot is rejected
-            if target_slot_id_int == appointment.slot_id:
-                return Response(
-                    {"error": "Cannot reschedule to the same slot. Please select a different consultation slot."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # R3: Target slot validations
+            if new_slot.is_past():
+                return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)
+            if new_slot.is_blocked:
+                return Response({"error": "The selected slot is temporarily blocked by hospital administration. Please choose an active slot."}, status=status.HTTP_400_BAD_REQUEST)
+            if new_slot.booked_count() >= new_slot.max_capacity:
+                return Response({"error": f"The selected slot is completely booked ({new_slot.max_capacity} of {new_slot.max_capacity} appointments filled). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
+            if new_slot.doctor_id != appointment.doctor_id:
+                return Response({"error": "Target slot must belong to the same doctor. Doctor change is not permitted during reschedule."}, status=status.HTTP_400_BAD_REQUEST)
 
-            with transaction.atomic():
-                new_slot = get_object_or_404(Slot.objects.select_for_update().select_related('doctor'), id=target_slot_id_int)
-                
-                # R3: Target slot validations
-                if new_slot.is_past():
-                    return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)
-                if new_slot.is_blocked:
-                    return Response({"error": "The selected slot is temporarily blocked by hospital administration. Please choose an active slot."}, status=status.HTTP_400_BAD_REQUEST)
-                if new_slot.booked_count() >= new_slot.max_capacity:
-                    return Response({"error": f"The selected slot is completely booked ({new_slot.max_capacity} of {new_slot.max_capacity} appointments filled). Please choose another slot."}, status=status.HTTP_400_BAD_REQUEST)
-                if new_slot.doctor_id != appointment.doctor_id:
-                    return Response({"error": "Target slot must belong to the same doctor. Doctor change is not permitted during reschedule."}, status=status.HTTP_400_BAD_REQUEST)
+            # R7: Prevent duplicate appointment by same patient in target slot
+            if Appointment.objects.filter(patient=appointment.patient, slot=new_slot, status__in=['pending', 'confirmed']).exists():
+                return Response({"error": "You already hold an active appointment in this slot. Duplicate bookings in the same slot are not permitted."}, status=status.HTTP_400_BAD_REQUEST)
 
-                # R7: Prevent duplicate appointment by same patient in target slot
-                if Appointment.objects.filter(patient=appointment.patient, slot=new_slot, status__in=['pending', 'confirmed']).exists():
-                    return Response({"error": "You already hold an active appointment in this slot. Duplicate bookings in the same slot are not permitted."}, status=status.HTTP_400_BAD_REQUEST)
+            old_slot_info = f"{appointment.slot.date} at {appointment.slot.start_time.strftime('%H:%M')}"
+            appointment.slot = new_slot
+            appointment.status = 'confirmed'
+            appointment.reschedule_count = (appointment.reschedule_count or 0) + 1
+            appointment.last_rescheduled_at = timezone.now()
+            if is_admin and appointment.patient != request.user:
+                appointment.notes = f"[Admin Rescheduled by {request.user.email}] {appointment.notes or ''}".strip()
 
-                appointment.slot = new_slot
-                appointment.status = 'confirmed'
-                appointment.reschedule_count = (appointment.reschedule_count or 0) + 1
-                appointment.last_rescheduled_at = timezone.now()
-                appointment.save(update_fields=['slot', 'status', 'reschedule_count', 'last_rescheduled_at', 'updated_at'])
+            appointment.save(update_fields=['slot', 'status', 'reschedule_count', 'last_rescheduled_at', 'notes', 'updated_at'])
 
-                # Invalidate doctor slots and dashboard caches
-                from django.core.cache import cache
-                cache.clear()
+            # Invalidate doctor slots and dashboard caches
+            from django.core.cache import cache
+            cache.clear()
 
-                return Response({
-                    "message": f"Appointment successfully rescheduled to {new_slot.date} at {new_slot.start_time.strftime('%H:%M')}.",
-                    "appointment": AppointmentSerializer(appointment).data
-                })
+        # R11: Reschedule email notification to patient
+        try:
+            from appointments.notifications import send_reschedule_notification
+            send_reschedule_notification(appointment, old_slot_info=old_slot_info)
+        except Exception as e:
+            print(f"Failed sending reschedule notification: {e}")
 
         return Response({
-            "message": "Please select a new slot to complete the reschedule.",
-            "doctor_id": appointment.doctor.id
+            "message": f"Appointment successfully rescheduled to {new_slot.date} at {new_slot.start_time.strftime('%H:%M')}.",
+            "appointment": AppointmentSerializer(appointment).data
         })
 
 
