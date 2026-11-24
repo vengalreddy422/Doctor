@@ -174,10 +174,20 @@ class AboutStatsView(APIView):
 
 
 class AdminDoctorListCreateView(generics.ListCreateAPIView):
-    queryset = Doctor.objects.all().order_by('-id')
     serializer_class = DoctorSerializer
     permission_classes = [IsHospitalOrAdminRole]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'hospital':
+            user_hosp = getattr(user, 'hospital', None)
+            if not user_hosp and getattr(user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=user.hospital_name.strip()).first()
+            if user_hosp:
+                return Doctor.objects.filter(Q(hospital=user_hosp) | Q(hospital_name__iexact=user_hosp.name)).order_by('-id')
+            return Doctor.objects.none()
+        return Doctor.objects.all().order_by('-id')
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -221,10 +231,20 @@ class AdminDoctorListCreateView(generics.ListCreateAPIView):
 
 
 class AdminDoctorDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Doctor.objects.all()
     serializer_class = DoctorSerializer
     permission_classes = [IsHospitalOrAdminRole]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'hospital':
+            user_hosp = getattr(user, 'hospital', None)
+            if not user_hosp and getattr(user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=user.hospital_name.strip()).first()
+            if user_hosp:
+                return Doctor.objects.filter(Q(hospital=user_hosp) | Q(hospital_name__iexact=user_hosp.name))
+            return Doctor.objects.none()
+        return Doctor.objects.all()
 
     def perform_update(self, serializer):
         user = self.request.user

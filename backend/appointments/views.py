@@ -311,9 +311,19 @@ class AppointmentDetailView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.role == 'admin' or self.request.user.is_superuser:
+        user = self.request.user
+        if user.role == 'admin' or user.is_superuser:
             return Appointment.objects.all().select_related('doctor', 'slot', 'patient')
-        return Appointment.objects.filter(patient=self.request.user).select_related('doctor', 'slot', 'patient')
+        if user.role == 'hospital':
+            user_hosp = getattr(user, 'hospital', None)
+            if not user_hosp and getattr(user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=user.hospital_name.strip()).first()
+            if user_hosp:
+                return Appointment.objects.filter(
+                    Q(doctor__hospital=user_hosp) | Q(doctor__hospital_name__iexact=user_hosp.name)
+                ).select_related('doctor', 'slot', 'patient')
+            return Appointment.objects.none()
+        return Appointment.objects.filter(patient=user).select_related('doctor', 'slot', 'patient')
 
 
 class MyAppointmentsView(APIView):
@@ -795,10 +805,13 @@ class AdminAppointmentListView(generics.ListAPIView):
             .order_by('-created_at')
         )
         if user.role == 'hospital':
-            if user.hospital:
-                qs = qs.filter(Q(doctor__hospital=user.hospital) | Q(doctor__hospital_name__iexact=user.hospital.name))
-            elif user.hospital_name:
-                qs = qs.filter(doctor__hospital_name__iexact=user.hospital_name)
+            user_hosp = getattr(user, 'hospital', None)
+            if not user_hosp and getattr(user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=user.hospital_name.strip()).first()
+            if user_hosp:
+                qs = qs.filter(Q(doctor__hospital=user_hosp) | Q(doctor__hospital_name__iexact=user_hosp.name))
+            else:
+                return Appointment.objects.none()
 
         status_param = self.request.GET.get('status')
         if status_param and status_param != 'all':
@@ -826,6 +839,18 @@ class AdminAppointmentStatusUpdateView(APIView):
             appointment = Appointment.objects.select_related('patient', 'doctor', 'slot').get(id=appointment_id)
         except Appointment.DoesNotExist:
             return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            doc_hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+            doc_hosp_name = appointment.doctor.hospital_name.strip().lower() if appointment.doctor and appointment.doctor.hospital_name else ''
+            matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+            if not matches:
+                return Response({"error": "Unauthorized: Cannot modify appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
         new_status = request.data.get('status')
         reason = request.data.get('reason', 'Hospital / Admin operational schedule adjustment.').strip()
@@ -878,7 +903,16 @@ class AdminSlotListView(APIView):
     def get(self, request):
         doctor_id = request.GET.get('doctor_id')
         hospital = request.GET.get('hospital', '').strip()
-        if not hospital and request.user.role == 'hospital' and getattr(request.user, 'hospital_name', None):
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            if hospital and hospital.lower() != user_hosp.name.lower():
+                return Response({"error": "Unauthorized: Cannot view slots from a different hospital facility."}, status=status.HTTP_403_FORBIDDEN)
+            hospital = user_hosp.name
+        elif not hospital and request.user.role == 'hospital' and getattr(request.user, 'hospital_name', None):
             hospital = request.user.hospital_name.strip()
         date_str = request.GET.get('date', '').strip()
         status_filter = request.GET.get('status', 'all').strip()  # all, available, full, blocked
@@ -974,6 +1008,18 @@ class AdminCancelSlotView(APIView):
             slot = Slot.objects.select_related('doctor').get(id=slot_id)
         except Slot.DoesNotExist:
             return Response({"error": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            doc_hosp_id = slot.doctor.hospital_id if slot.doctor else None
+            doc_hosp_name = slot.doctor.hospital_name.strip().lower() if slot.doctor and slot.doctor.hospital_name else ''
+            matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+            if not matches:
+                return Response({"error": "Unauthorized: Cannot cancel slots belonging to another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
             # Mark original slot as blocked
@@ -1088,9 +1134,21 @@ class AdminToggleSlotBlockView(APIView):
 
     def post(self, request, slot_id):
         try:
-            slot = Slot.objects.get(id=slot_id)
+            slot = Slot.objects.select_related('doctor').get(id=slot_id)
         except Slot.DoesNotExist:
             return Response({"error": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            doc_hosp_id = slot.doctor.hospital_id if slot.doctor else None
+            doc_hosp_name = slot.doctor.hospital_name.strip().lower() if slot.doctor and slot.doctor.hospital_name else ''
+            matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+            if not matches:
+                return Response({"error": "Unauthorized: Cannot toggle slots belonging to another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
         slot.is_blocked = not slot.is_blocked
         slot.save(update_fields=['is_blocked'])
@@ -1121,8 +1179,27 @@ class AdminRescheduleAppointmentView(APIView):
         except Appointment.DoesNotExist:
             return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        if request.user.role == 'hospital':
+            user_hosp = getattr(request.user, 'hospital', None)
+            if not user_hosp and getattr(request.user, 'hospital_name', None):
+                user_hosp = Hospital.objects.filter(name__iexact=request.user.hospital_name.strip()).first()
+            if not user_hosp:
+                return Response({"error": "No hospital facility assigned to your account."}, status=status.HTTP_403_FORBIDDEN)
+            doc_hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+            doc_hosp_name = appointment.doctor.hospital_name.strip().lower() if appointment.doctor and appointment.doctor.hospital_name else ''
+            matches = (doc_hosp_id == user_hosp.id) or (doc_hosp_name == user_hosp.name.strip().lower())
+            if not matches:
+                return Response({"error": "Unauthorized: Cannot reschedule appointments from another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
+
         with transaction.atomic():
             new_slot = get_object_or_404(Slot.objects.select_for_update().select_related('doctor'), id=new_slot_id)
+
+            if request.user.role == 'hospital':
+                new_doc_hosp_id = new_slot.doctor.hospital_id if new_slot.doctor else None
+                new_doc_hosp_name = new_slot.doctor.hospital_name.strip().lower() if new_slot.doctor and new_slot.doctor.hospital_name else ''
+                new_matches = (new_doc_hosp_id == user_hosp.id) or (new_doc_hosp_name == user_hosp.name.strip().lower())
+                if not new_matches:
+                    return Response({"error": "Unauthorized: Target slot belongs to another hospital facility."}, status=status.HTTP_403_FORBIDDEN)
 
             if new_slot.is_past():
                 return Response({"error": "Cannot reschedule to a past slot."}, status=status.HTTP_400_BAD_REQUEST)

@@ -257,3 +257,48 @@ class TestHospitalScopingAndPermissions:
         assert res.data["count"] >= 1
         assert "summary" in res.data
         assert "ready_to_admit" in res.data["summary"]
+
+    def test_legacy_admin_endpoints_tenant_scoping(self, api_client):
+        """
+        Verify tenant scoping across legacy admin endpoints:
+        Hospital A staff cannot cancel, reschedule, block, or view resources of Hospital B.
+        """
+        api_client.force_authenticate(user=self.staff_a)
+
+        # 1. Status update / cancellation on Hospital B appointment -> 403
+        res_status = api_client.patch(f"/api/appointments/admin/{self.appt_b.id}/status/", {"status": "cancelled"})
+        assert res_status.status_code == status.HTTP_403_FORBIDDEN
+        assert "Unauthorized" in res_status.data.get("error", "")
+
+        # 2. Reschedule Hospital B appointment -> 403
+        res_reschedule = api_client.post(f"/api/appointments/admin/{self.appt_b.id}/reschedule/", {"new_slot_id": self.slot_a.id})
+        assert res_reschedule.status_code == status.HTTP_403_FORBIDDEN
+        assert "Unauthorized" in res_reschedule.data.get("error", "")
+
+        # 3. Reschedule Hospital A appointment into Hospital B slot -> 403
+        res_cross_slot = api_client.post(f"/api/appointments/admin/{self.appt_a.id}/reschedule/", {"new_slot_id": self.slot_b.id})
+        assert res_cross_slot.status_code == status.HTTP_403_FORBIDDEN
+        assert "Unauthorized" in res_cross_slot.data.get("error", "")
+
+        # 4. Cancel/Resolve slot belonging to Hospital B -> 403
+        res_cancel_slot = api_client.post(f"/api/appointments/admin/slots/{self.slot_b.id}/cancel/", {"action": "cancel_refund"})
+        assert res_cancel_slot.status_code == status.HTTP_403_FORBIDDEN
+
+        # 5. Toggle block on slot belonging to Hospital B -> 403
+        res_toggle_slot = api_client.post(f"/api/appointments/admin/slots/{self.slot_b.id}/toggle-block/")
+        assert res_toggle_slot.status_code == status.HTTP_403_FORBIDDEN
+
+        # 6. Admin slots filter for another hospital -> 403
+        res_slot_filter = api_client.get(f"/api/appointments/admin/slots/?hospital={self.hospital_b.name}")
+        assert res_slot_filter.status_code == status.HTTP_403_FORBIDDEN
+
+        # 7. Doctor detail endpoint for Doctor B -> 404 (scoped out of queryset)
+        res_doc_detail = api_client.get(f"/api/doctors/admin/{self.doctor_b.id}/")
+        assert res_doc_detail.status_code == status.HTTP_404_NOT_FOUND
+
+        # 8. Doctor list endpoint returns only Doctor A
+        res_doc_list = api_client.get("/api/doctors/admin/")
+        assert res_doc_list.status_code == status.HTTP_200_OK
+        doc_ids = [d["id"] for d in res_doc_list.data["results"]] if "results" in res_doc_list.data else [d["id"] for d in res_doc_list.data]
+        assert self.doctor_a.id in doc_ids
+        assert self.doctor_b.id not in doc_ids
