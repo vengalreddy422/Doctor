@@ -200,10 +200,13 @@ class Appointment(models.Model):
         super().save(*args, **kwargs)
 
     def _generate_receipt_id(self):
-        """Generate a unique receipt ID: MC-YYYYMMDD-XXXX"""
+        """Generate a unique receipt ID: MC-YYYYMMDD-XXXX with collision check"""
         date_str = timezone.localdate().strftime('%Y%m%d')
-        short_uuid = uuid.uuid4().hex[:4].upper()
-        return f'MC-{date_str}-{short_uuid}'
+        for _ in range(10):
+            candidate = f'MC-{date_str}-{uuid.uuid4().hex[:8].upper()}'
+            if not Appointment.objects.filter(receipt_id=candidate).exists():
+                return candidate
+        return f'MC-{date_str}-{uuid.uuid4().hex[:12].upper()}'
 
     def get_hours_until_slot(self):
         """Calculate exact hours remaining until appointment slot start in Asia/Kolkata timezone."""

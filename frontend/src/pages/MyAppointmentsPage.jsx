@@ -263,12 +263,14 @@ const MyAppointmentsPage = () => {
       error: '',
     });
     try {
-      const res = await api.get(`/doctors/${doctorId}/slots/`);
-      // Extract unique upcoming dates from slots
-      const slots = res.data || [];
-      const dates = Array.from(new Set(slots.map(s => s.date))).sort();
+      const datesRes = await api.get(`/doctors/${doctorId}/available-dates/`);
+      const dates = datesRes.data || [];
       const initialDate = dates[0] || '';
-      const initialSlots = initialDate ? slots.filter(s => s.date === initialDate) : [];
+      let initialSlots = [];
+      if (initialDate) {
+        const slotsRes = await api.get(`/doctors/${doctorId}/slots/?date=${initialDate}`);
+        initialSlots = slotsRes.data || [];
+      }
       setRescheduleModal(prev => ({
         ...prev,
         availableDates: dates,
