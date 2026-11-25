@@ -17,6 +17,7 @@ from doctors.models import Doctor, Hospital
 from doctors.serializers import DoctorSerializer
 from payments.models import Payment
 from payments.serializers import PaymentSerializer
+from django.core.cache import cache
 from .models import Slot, Appointment, Coupon, CouponUsage
 from .serializers import (
     BookAppointmentSerializer, AppointmentSerializer,
@@ -30,6 +31,28 @@ from .notifications import (
 )
 
 User = get_user_model()
+
+
+def invalidate_hospital_cache(hospital_id=None):
+    """
+    Targeted cache invalidation for hospital analytics and slot availability.
+    Preserves authentication tokens (FastCachedJWTAuthentication) and doctor catalogs in cache,
+    ensuring sub-second response times on subsequent actions.
+    """
+    keys_to_delete = []
+    if hasattr(cache, '_cache'):
+        for k in list(cache._cache.keys()):
+            raw_key = k.split(':', 2)[-1]
+            if raw_key.startswith('jwt_user_'):
+                continue
+            if hospital_id:
+                if f'_{hospital_id}_' in raw_key or raw_key.startswith(f'hosp_doc_cnt_{hospital_id}'):
+                    keys_to_delete.append(raw_key)
+            else:
+                if raw_key.startswith(('hosp_', 'admin_dashboard', 'available_slots')):
+                    keys_to_delete.append(raw_key)
+    for rk in keys_to_delete:
+        cache.delete(rk)
 
 
 def get_user_booking_stats(user):
@@ -294,8 +317,8 @@ class BookAppointmentView(APIView):
                 CouponUsage.objects.get_or_create(user=request.user, coupon=coupon, defaults={'appointment': appointment})
 
             # Invalidate slots and dashboard stats caches for immediate live updates
-            from django.core.cache import cache
-            cache.clear()
+            hosp_id = slot.doctor.hospital_id if slot.doctor else None
+            invalidate_hospital_cache(hosp_id)
 
             # Trigger email notification
             try:
@@ -504,8 +527,8 @@ class CancelAppointmentView(APIView):
                 payment.save(update_fields=['status', 'razorpay_refund_id', 'refund_status', 'refund_error', 'updated_at'])
 
             # Invalidate slots and dashboard caches for immediate live updates
-            from django.core.cache import cache
-            cache.clear()
+            hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+            invalidate_hospital_cache(hosp_id)
 
         try:
             send_cancellation_notification(appointment, refund_info=refund_info)
@@ -625,8 +648,8 @@ class RescheduleAppointmentView(APIView):
             appointment.save(update_fields=['slot', 'status', 'reschedule_count', 'last_rescheduled_at', 'notes', 'updated_at'])
 
             # Invalidate doctor slots and dashboard caches
-            from django.core.cache import cache
-            cache.clear()
+            hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+            invalidate_hospital_cache(hosp_id)
 
         # R11: Reschedule email notification to patient
         try:
@@ -689,8 +712,8 @@ class AppointmentCheckInView(APIView):
         appointment.save(update_fields=['op_checked_in', 'op_checked_in_at', 'updated_at'])
 
         # Invalidate dashboard stats cache
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response({
             "message": f"Patient '{appointment.patient_name or appointment.patient.username}' acknowledged and checked in at OP.",
@@ -747,8 +770,8 @@ class AppointmentCompleteView(APIView):
         appointment.save(update_fields=['status', 'completed_at', 'op_checked_in', 'op_checked_in_at', 'updated_at'])
 
         # Invalidate dashboard stats cache
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response({
             "message": f"Consultation for '{appointment.patient_name or appointment.patient.username}' marked as COMPLETED. Patient can now submit review and rating.",
@@ -783,8 +806,8 @@ class AppointmentRevertCheckInView(APIView):
         appointment.completed_at = None
         appointment.save(update_fields=['status', 'op_checked_in', 'op_checked_in_at', 'completed_at', 'updated_at'])
 
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response({
             "message": f"Appointment for '{appointment.patient_name or appointment.patient.username}' successfully reverted to Booked/Confirmed.",
@@ -988,8 +1011,8 @@ class AdminAppointmentStatusUpdateView(APIView):
                 appointment.status = new_status
                 appointment.save(update_fields=['status', 'updated_at'])
 
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response(AppointmentSerializer(appointment).data)
 
@@ -1205,8 +1228,8 @@ class AdminCancelSlotView(APIView):
                     except Exception as e:
                         print(f"Failed sending slot cancel email: {e}")
 
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = slot.doctor.hospital_id if slot.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         res_msg = f"Slot on {slot.date} ({slot.start_time.strftime('%H:%M')}) has been blocked. "
         if rescheduled_list:
@@ -1251,8 +1274,8 @@ class AdminToggleSlotBlockView(APIView):
         slot.is_blocked = not slot.is_blocked
         slot.save(update_fields=['is_blocked'])
 
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = slot.doctor.hospital_id if slot.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response({
             "message": f"Slot is now {'Blocked' if slot.is_blocked else 'Unblocked / Active'}.",
@@ -1324,8 +1347,8 @@ class AdminRescheduleAppointmentView(APIView):
             except Exception as e:
                 print(f"Failed sending admin reschedule email: {e}")
 
-        from django.core.cache import cache
-        cache.clear()
+        hosp_id = appointment.doctor.hospital_id if appointment.doctor else None
+        invalidate_hospital_cache(hosp_id)
 
         return Response({
             "message": f"Appointment successfully rescheduled to {new_slot.date} at {new_slot.start_time.strftime('%H:%M')}.",
@@ -1954,11 +1977,13 @@ class HospitalQueueView(APIView):
             page = page_obj.number
 
         today = timezone.localdate()
-        today_inflow = base_qs.filter(Q(slot__date=today) | Q(created_at__date=today)).count()
-        ready_to_admit = base_qs.filter(status__in=['pending', 'confirmed'], op_checked_in=False).count()
-        in_chamber = base_qs.filter(op_checked_in=True, status='confirmed').count()
-        completed_today = base_qs.filter(status='completed', completed_at__date=today).count()
-        cancelled_today = base_qs.filter(status='cancelled', slot__date=today).count()
+        summary_agg = base_qs.aggregate(
+            today_inflow=Count('id', filter=Q(slot__date=today) | Q(created_at__date=today)),
+            ready_to_admit=Count('id', filter=Q(status__in=['pending', 'confirmed'], op_checked_in=False)),
+            in_chamber=Count('id', filter=Q(op_checked_in=True, status='confirmed')),
+            completed_today=Count('id', filter=Q(status='completed', completed_at__date=today)),
+            cancelled_today=Count('id', filter=Q(status='cancelled', slot__date=today)),
+        )
 
         specializations = sorted(list(set(doc_qs.exclude(specialization='').values_list('specialization', flat=True))))
         doctors_summary = list(doc_qs.values('id', 'name', 'specialization'))
@@ -1971,11 +1996,11 @@ class HospitalQueueView(APIView):
             'has_next': page_obj.has_next(),
             'has_previous': page_obj.has_previous(),
             'summary': {
-                'today_inflow': today_inflow,
-                'ready_to_admit': ready_to_admit,
-                'in_chamber': in_chamber,
-                'completed_today': completed_today,
-                'cancelled_today': cancelled_today,
+                'today_inflow': summary_agg['today_inflow'] or 0,
+                'ready_to_admit': summary_agg['ready_to_admit'] or 0,
+                'in_chamber': summary_agg['in_chamber'] or 0,
+                'completed_today': summary_agg['completed_today'] or 0,
+                'cancelled_today': summary_agg['cancelled_today'] or 0,
                 'total_in_filter': paginator.count,
             },
             'hospital': {
@@ -2056,20 +2081,36 @@ class HospitalAnalyticsView(APIView):
                 })
 
         doctors_occupancy = []
-        for doc in doc_qs.filter(is_active=True).order_by('name'):
-            doc_slots = Slot.objects.filter(doctor=doc, date=today)
-            total_slots = doc_slots.count()
-            capacity = total_slots * 5
-            booked_count = Appointment.objects.filter(
-                doctor=doc,
+        active_docs = list(doc_qs.filter(is_active=True).order_by('name').values('id', 'name', 'specialization'))
+        active_doc_ids = [d['id'] for d in active_docs]
+
+        slots_by_doc = dict(
+            Slot.objects.filter(doctor_id__in=active_doc_ids, date=today)
+            .values('doctor_id')
+            .annotate(cnt=Count('id'))
+            .values_list('doctor_id', 'cnt')
+        )
+        appts_by_doc = dict(
+            Appointment.objects.filter(
+                doctor_id__in=active_doc_ids,
                 slot__date=today,
                 status__in=['confirmed', 'completed', 'pending']
-            ).count()
+            )
+            .values('doctor_id')
+            .annotate(cnt=Count('id'))
+            .values_list('doctor_id', 'cnt')
+        )
+
+        for doc_item in active_docs:
+            d_id = doc_item['id']
+            total_slots = slots_by_doc.get(d_id, 0)
+            capacity = total_slots * 5
+            booked_count = appts_by_doc.get(d_id, 0)
             rate = round((booked_count / capacity * 100), 1) if capacity > 0 else 0
             doctors_occupancy.append({
-                'doctor_id': doc.id,
-                'doctor_name': doc.name,
-                'specialization': doc.specialization,
+                'doctor_id': d_id,
+                'doctor_name': doc_item['name'],
+                'specialization': doc_item['specialization'],
                 'total_slots': total_slots,
                 'total_capacity': capacity,
                 'booked_count': booked_count,
@@ -2093,23 +2134,41 @@ class HospitalAnalyticsView(APIView):
             review_count=Count('id'),
         )
 
-        # 14-day trend calculation (volume, gross revenue, refunds, net)
+        # 14-day trend calculation (volume, gross revenue, refunds, net) in 2 batch queries
+        fourteen_days_ago = today - timedelta(days=13)
+        trend_start_dt = datetime(fourteen_days_ago.year, fourteen_days_ago.month, fourteen_days_ago.day, 0, 0, 0, tzinfo=kolkata_tz)
+
+        # 1. Batch Volume aggregation
+        vol_rows = list(base_appts.filter(
+            Q(slot__date__gte=fourteen_days_ago, slot__date__lte=today) |
+            Q(created_at__gte=trend_start_dt)
+        ).values('slot__date', 'created_at__date'))
+
+        vol_by_date = {today - timedelta(days=i): 0 for i in range(13, -1, -1)}
+        for r in vol_rows:
+            sd = r.get('slot__date')
+            cd = r.get('created_at__date')
+            for d in set(filter(None, [sd, cd])):
+                if d in vol_by_date:
+                    vol_by_date[d] += 1
+
+        # 2. Batch Payments aggregation
+        pay_rows = Payment.objects.filter(
+            appointment__doctor_id__in=doc_ids,
+            created_at__gte=trend_start_dt
+        ).annotate(d=TruncDate('created_at', tzinfo=kolkata_tz)).values('d').annotate(
+            c=Sum('amount', filter=Q(status='paid')),
+            r=Sum('amount', filter=Q(status='refunded'))
+        )
+        pay_by_date = {row['d']: row for row in pay_rows}
+
         fourteen_day_trend = []
         for i in range(13, -1, -1):
             d = today - timedelta(days=i)
-            day_start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=kolkata_tz)
-            day_end = day_start + timedelta(days=1)
-            d_vol = base_appts.filter(Q(slot__date=d) | Q(created_at__gte=day_start, created_at__lt=day_end)).count()
-            d_pay = Payment.objects.filter(
-                appointment__doctor_id__in=doc_ids,
-                created_at__gte=day_start,
-                created_at__lt=day_end
-            ).aggregate(
-                c=Sum('amount', filter=Q(status='paid')),
-                r=Sum('amount', filter=Q(status='refunded'))
-            )
-            c_val = d_pay['c'] or Decimal('0.00')
-            r_val = d_pay['r'] or Decimal('0.00')
+            d_vol = vol_by_date.get(d, 0)
+            p_info = pay_by_date.get(d)
+            c_val = (p_info['c'] if p_info else None) or Decimal('0.00')
+            r_val = (p_info['r'] if p_info else None) or Decimal('0.00')
             fourteen_day_trend.append({
                 'date': d.strftime('%Y-%m-%d'),
                 'label': d.strftime('%d %b'),
