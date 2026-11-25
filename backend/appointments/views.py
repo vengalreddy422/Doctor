@@ -1967,7 +1967,7 @@ class HospitalQueueView(APIView):
         except (ValueError, TypeError):
             page_size = 10
 
-        ordered_qs = qs.order_by('-slot__date', '-slot__start_time', '-id')
+        ordered_qs = qs.select_related('patient', 'doctor', 'doctor__hospital', 'slot').order_by('-slot__date', '-slot__start_time', '-id')
         paginator = Paginator(ordered_qs, page_size)
 
         try:
@@ -2026,7 +2026,7 @@ class HospitalAnalyticsView(APIView):
         import zoneinfo
         from datetime import datetime, timedelta
         from django.core.cache import cache
-        from django.db.models.functions import TruncHour
+        from django.db.models.functions import TruncHour, TruncDate
         from django.db.models import Avg
 
         target_hospital, err_resp = get_hospital_for_user(request)
