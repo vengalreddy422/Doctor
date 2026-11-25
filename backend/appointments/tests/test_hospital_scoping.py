@@ -55,11 +55,12 @@ class TestHospitalScopingAndPermissions:
                 "is_active": True,
             }
         )
+        today = timezone.localdate()
         self.slot_a, _ = Slot.objects.get_or_create(
             doctor=self.doctor_a,
-            date=datetime.date(2026, 12, 1),
-            start_time=datetime.time(10, 0),
-            defaults={"end_time": datetime.time(10, 30), "max_capacity": 5}
+            date=today,
+            start_time=timezone.localtime().time(),
+            defaults={"end_time": (timezone.localtime() + datetime.timedelta(minutes=30)).time(), "max_capacity": 5}
         )
 
         # Hospital B & Staff B
